@@ -35,10 +35,26 @@ jobs:
       - name: Build exe
         run: python tools/build_exe.py
 
-      - name: Upload build
+      - name: Install Inno Setup
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress }
+
+      - name: Build installer
+        run: python tools/build_installer.py --no-exe
+
+      - name: Upload installer
         uses: actions/upload-artifact@v4
         with:
-          name: KMuted-windows
+          name: KMuted-Setup
+          path: dist/KMuted-Setup-*.exe
+          if-no-files-found: error
+
+      - name: Upload portable build
+        uses: actions/upload-artifact@v4
+        with:
+          name: KMuted-portable
           path: dist/KMuted
           if-no-files-found: error
 
@@ -46,4 +62,6 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/*.zip
+          files: |
+            dist/KMuted-Setup-*.exe
+            dist/*.zip

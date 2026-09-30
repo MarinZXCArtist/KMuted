@@ -30,7 +30,9 @@ HISTORY_LIMIT = 50
 ENGINE_EDGE = "edge"
 ENGINE_SAPI = "sapi"
 ENGINE_PIPER = "piper"
-ENGINES = (ENGINE_EDGE, ENGINE_SAPI, ENGINE_PIPER)
+CLOUD_ENGINES = ("elevenlabs", "openai", "azure", "google", "yandex")
+FREE_ENGINES = (ENGINE_EDGE, ENGINE_SAPI, ENGINE_PIPER)
+ENGINES = FREE_ENGINES + CLOUD_ENGINES
 
 PLAYBACK_QUEUE = "queue"
 PLAYBACK_INTERRUPT = "interrupt"
@@ -60,6 +62,8 @@ class VoiceProfile:
     rvc_model: str = ""
     rvc_pitch: int = 0  # semitones
     rvc_method: str = "rmvpe"
+    hotkey: str = ""  # switch to this voice
+    model: str = ""  # cloud providers: model id (empty = provider default)
 
     def cache_key(self) -> tuple:
         return (
@@ -71,6 +75,7 @@ class VoiceProfile:
             self.rvc_enabled and self.rvc_model,
             self.rvc_enabled and self.rvc_pitch,
             self.rvc_enabled and self.rvc_method,
+            self.model,
         )
 
 
@@ -85,14 +90,31 @@ class Phrase:
 
 
 @dataclass
+class Sound:
+    """Soundboard entry: an audio file on a hotkey."""
+
+    id: str = field(default_factory=new_id)
+    name: str = ""
+    file: str = ""  # file name inside the sounds folder, or an absolute path
+    hotkey: str = ""
+    volume: int = 100  # percent, 0..200
+    restart: bool = True  # pressing again restarts instead of layering
+
+
+@dataclass
 class WheelSlot:
     text: str = ""
     label: str = ""  # short caption on the wheel; falls back to text
     voice_id: str = ""
+    sound_id: str = ""  # if set, the slot plays this sound instead of speaking
 
     @property
     def caption(self) -> str:
         return (self.label or self.text).strip()
+
+    @property
+    def filled(self) -> bool:
+        return bool(self.text.strip() or self.sound_id)
 
 
 @dataclass
@@ -109,6 +131,7 @@ class Wheel:
 class AudioSettings:
     mic_device: str = ""  # output device of the virtual cable, e.g. "CABLE Input"
     mic_volume: int = 100
+    mic_muted: bool = False  # hotkey-toggled: KMuted stays silent in the mic
     monitor_enabled: bool = True
     monitor_device: str = ""  # "" = system default output
     monitor_volume: int = 60
@@ -124,11 +147,28 @@ class AudioSettings:
 @dataclass
 class GeneralSettings:
     active_voice_id: str = ""
+    language: str = ""  # "" = auto (installer choice / system language)
+    accent: str = "violet"
     hotkeys_enabled: bool = True
+    # global actions (see kmuted/actions.py)
     input_hotkey: str = "alt+t"
+    repeat_hotkey: str = "alt+r"
     stop_hotkey: str = "alt+s"
-    toggle_hotkeys_hotkey: str = ""
+    stop_sounds_hotkey: str = ""
     next_voice_hotkey: str = ""
+    prev_voice_hotkey: str = ""
+    mute_hotkey: str = ""
+    monitor_hotkey: str = ""
+    passthrough_hotkey: str = ""
+    volume_up_hotkey: str = ""
+    volume_down_hotkey: str = ""
+    toggle_hotkeys_hotkey: str = ""
+    show_window_hotkey: str = ""
+    input_position: str = "center"  # top / center / bottom
+    wheel_scale: int = 100  # percent
+    check_updates: bool = True
+    last_update_check: float = 0.0
+    skipped_version: str = ""
     wheel_mode: str = WHEEL_HOLD
     wheel_deadzone: int = 40
     input_keep_open: bool = False
@@ -140,19 +180,37 @@ class GeneralSettings:
 
 
 @dataclass
+class CloudSettings:
+    """API keys of paid/freemium voice services (stored encrypted on Windows)."""
+
+    elevenlabs_key: str = ""
+    openai_key: str = ""
+    azure_key: str = ""
+    azure_region: str = "westeurope"
+    google_key: str = ""
+    yandex_key: str = ""
+    prewarm_paid: bool = False  # pre-synthesize phrases with paid voices (costs credits)
+
+
+@dataclass
 class Config:
     version: int = CONFIG_VERSION
     general: GeneralSettings = field(default_factory=GeneralSettings)
     audio: AudioSettings = field(default_factory=AudioSettings)
+    cloud: CloudSettings = field(default_factory=CloudSettings)
     voices: list[VoiceProfile] = field(default_factory=list)
     phrases: list[Phrase] = field(default_factory=list)
     wheels: list[Wheel] = field(default_factory=list)
+    sounds: list[Sound] = field(default_factory=list)
     history: list[str] = field(default_factory=list)
 
     # --- lookups -----------------------------------------------------------
 
     def voice_by_id(self, voice_id: str) -> VoiceProfile | None:
         return next((v for v in self.voices if v.id == voice_id), None)
+
+    def sound_by_id(self, sound_id: str) -> Sound | None:
+        return next((x for x in self.sounds if x.id == sound_id), None)
 
     def active_voice(self) -> VoiceProfile:
         voice = self.voice_by_id(self.general.active_voice_id)
@@ -178,8 +236,13 @@ class Config:
     def normalize(self) -> "Config":
         """Fix values that could break the app (after load or edits)."""
         g = self.general
-        for name in ("input_hotkey", "stop_hotkey", "toggle_hotkeys_hotkey", "next_voice_hotkey"):
-            setattr(g, name, normalize_combo(getattr(g, name)))
+        from kmuted.actions import ACTION_KEYS, attr
+
+        for key in ACTION_KEYS:
+            setattr(g, attr(key), normalize_combo(getattr(g, attr(key))))
+        if g.input_position not in ("top", "center", "bottom"):
+            g.input_position = "center"
+        g.wheel_scale = _clamp(g.wheel_scale, 60, 150)
         if g.wheel_mode not in (WHEEL_HOLD, WHEEL_TOGGLE):
             g.wheel_mode = WHEEL_HOLD
         g.wheel_deadzone = _clamp(g.wheel_deadzone, 10, 200)
@@ -194,6 +257,7 @@ class Config:
             a.playback_mode = PLAYBACK_QUEUE
 
         for v in self.voices:
+            v.hotkey = normalize_combo(v.hotkey)
             if v.engine not in ENGINES:
                 v.engine = ENGINE_EDGE
             v.rate = _clamp(v.rate, -50, 100)
@@ -202,6 +266,9 @@ class Config:
             v.rvc_pitch = _clamp(v.rvc_pitch, -24, 24)
         for p in self.phrases:
             p.hotkey = normalize_combo(p.hotkey)
+        for snd in self.sounds:
+            snd.hotkey = normalize_combo(snd.hotkey)
+            snd.volume = _clamp(snd.volume, 0, 200)
         for w in self.wheels:
             w.hotkey = normalize_combo(w.hotkey)
             if len(w.slots) < WHEEL_MIN_SLOTS:
@@ -276,35 +343,46 @@ def _convert(tp: Any, value: Any) -> Any:
 # --- defaults ---------------------------------------------------------------
 
 
+# (text, caption) of the starter wheel; translated when the config is created
+DEFAULT_WHEEL = [
+    ("Да", "Да"),
+    ("Внимание, враг рядом!", "Враг!"),
+    ("Иду к вам.", "Иду"),
+    ("Нужна помощь!", "Помощь"),
+    ("Нет", "Нет"),
+    ("Отступаем!", "Отход"),
+    ("Спасибо!", "Спасибо"),
+    ("Хорошая игра!", "GG"),
+]
+
+
 def default_config() -> Config:
-    dmitry = VoiceProfile(name="Дмитрий (Edge)", engine=ENGINE_EDGE, voice="ru-RU-DmitryNeural")
-    svetlana = VoiceProfile(name="Светлана (Edge)", engine=ENGINE_EDGE, voice="ru-RU-SvetlanaNeural")
-    voices = [dmitry, svetlana]
+    """Starter voices, phrases and a wheel in the current UI language."""
+    from kmuted.i18n import language, tr
+
+    if language() == "en":
+        first = VoiceProfile(name="Andrew (Edge)", engine=ENGINE_EDGE, voice="en-US-AndrewMultilingualNeural")
+        second = VoiceProfile(name="Emma (Edge)", engine=ENGINE_EDGE, voice="en-US-EmmaMultilingualNeural")
+    else:
+        first = VoiceProfile(name="Дмитрий (Edge)", engine=ENGINE_EDGE, voice="ru-RU-DmitryNeural")
+        second = VoiceProfile(name="Светлана (Edge)", engine=ENGINE_EDGE, voice="ru-RU-SvetlanaNeural")
+    voices = [first, second]
     if os.name == "nt":
-        voices.append(VoiceProfile(name="Windows (офлайн)", engine=ENGINE_SAPI, voice=""))
+        voices.append(VoiceProfile(name=tr("Windows (офлайн)"), engine=ENGINE_SAPI, voice=""))
 
     phrases = [
-        Phrase(text="Привет всем!", hotkey="alt+1"),
-        Phrase(text="Спасибо!", hotkey="alt+2"),
-        Phrase(text="Секунду, я отойду.", hotkey="alt+3"),
-        Phrase(text="Я не могу говорить в микрофон, пишу через озвучку.", hotkey="alt+4"),
+        Phrase(text=tr("Привет всем!"), hotkey="alt+1"),
+        Phrase(text=tr("Спасибо!"), hotkey="alt+2"),
+        Phrase(text=tr("Секунду, я отойду."), hotkey="alt+3"),
+        Phrase(text=tr("Я не могу говорить в микрофон, пишу через озвучку."), hotkey="alt+4"),
     ]
     wheel = Wheel(
-        name="Основное",
+        name=tr("Основное"),
         hotkey="alt+q",
-        slots=[
-            WheelSlot(text="Да", label="Да"),
-            WheelSlot(text="Внимание, враг рядом!", label="Враг!"),
-            WheelSlot(text="Иду к вам.", label="Иду"),
-            WheelSlot(text="Нужна помощь!", label="Помощь"),
-            WheelSlot(text="Нет", label="Нет"),
-            WheelSlot(text="Отступаем!", label="Отход"),
-            WheelSlot(text="Спасибо!", label="Спасибо"),
-            WheelSlot(text="Хорошая игра!", label="GG"),
-        ],
+        slots=[WheelSlot(text=tr(text), label=tr(label)) for text, label in DEFAULT_WHEEL],
     )
     cfg = Config(voices=voices, phrases=phrases, wheels=[wheel])
-    cfg.general.active_voice_id = dmitry.id
+    cfg.general.active_voice_id = first.id
     return cfg.normalize()
 
 
@@ -329,11 +407,27 @@ def load_config(path: Path | None = None) -> Config:
         cfg = default_config()
         save_config(cfg, path)
         return cfg
-    return from_dict(Config, data).normalize()
+    return _decrypt_keys(from_dict(Config, data)).normalize()
+
+
+KEY_FIELDS = ("elevenlabs_key", "openai_key", "azure_key", "google_key", "yandex_key")
 
 
 def save_config(cfg: Config, path: Path | None = None) -> None:
+    from kmuted import keystore
+
     path = path or paths.config_path()
+    data = to_dict(cfg)
+    for name in KEY_FIELDS:  # API keys are encrypted at rest
+        data["cloud"][name] = keystore.protect(data["cloud"][name])
     tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(to_dict(cfg), ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     os.replace(tmp, path)
+
+
+def _decrypt_keys(cfg: Config) -> Config:
+    from kmuted import keystore
+
+    for name in KEY_FIELDS:
+        setattr(cfg.cloud, name, keystore.unprotect(getattr(cfg.cloud, name)))
+    return cfg

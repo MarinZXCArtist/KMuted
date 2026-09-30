@@ -25,6 +25,7 @@ import soundfile as sf
 
 from kmuted.audio.dsp import Clip
 from kmuted.tts.base import TTSError
+from kmuted.i18n import tr
 
 log = logging.getLogger(__name__)
 
@@ -61,10 +62,10 @@ class RVCClient:
                 detail = json.loads(detail).get("detail", detail)
             except (ValueError, AttributeError):
                 pass
-            raise TTSError(f"RVC сервер: {detail}") from exc
+            raise TTSError(tr("RVC сервер: {detail}", detail=detail)) from exc
         except (urllib.error.URLError, OSError) as exc:
             raise TTSError(
-                f"RVC сервер не отвечает ({self.base_url}). Запустите start_rvc_server.bat. ({exc})"
+                tr("RVC сервер не отвечает ({url}). Запустите start_rvc_server.bat. ({error})", url=self.base_url, error=exc)
             ) from exc
 
     def list_models(self) -> list[str]:
@@ -72,7 +73,7 @@ class RVCClient:
         try:
             return sorted(json.loads(body).get("models", []))
         except (ValueError, AttributeError) as exc:
-            raise TTSError("RVC сервер вернул некорректный список моделей") from exc
+            raise TTSError(tr("RVC сервер вернул некорректный список моделей")) from exc
 
     def is_online(self) -> bool:
         try:
@@ -85,7 +86,7 @@ class RVCClient:
 
     def convert(self, clip: Clip, model: str, pitch: int = 0, method: str = "rmvpe") -> Clip:
         if not model:
-            raise TTSError("Не выбрана RVC-модель")
+            raise TTSError(tr("Не выбрана RVC-модель"))
         wav = io.BytesIO()
         sf.write(wav, clip.samples, clip.sample_rate, format="WAV", subtype="PCM_16")
         payload = {"audio_data": base64.b64encode(wav.getvalue()).decode("ascii")}
@@ -103,7 +104,7 @@ class RVCClient:
         try:
             samples, rate = sf.read(io.BytesIO(body), dtype="float32", always_2d=False)
         except Exception as exc:
-            raise TTSError(f"RVC сервер вернул не WAV: {exc}") from exc
+            raise TTSError(tr("RVC сервер вернул не WAV: {error}", error=exc)) from exc
         return Clip(samples, int(rate))
 
     def _prepare(self, model: str, pitch: int, method: str) -> None:

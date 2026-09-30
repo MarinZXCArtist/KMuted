@@ -59,3 +59,7 @@ def piper_voices_dir() -> Path:
 
 def rvc_models_dir() -> Path:
     return _subdir("voices", "rvc")
+
+
+def sounds_dir() -> Path:
+    return _subdir("sounds")

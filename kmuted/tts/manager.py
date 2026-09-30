@@ -22,12 +22,14 @@ import soundfile as sf
 
 from kmuted import paths
 from kmuted.audio.dsp import Clip, apply_gain, prepare_clip
-from kmuted.config import VoiceProfile
+from kmuted.config import CloudSettings, VoiceProfile
 from kmuted.tts.base import TTSEngine, TTSError
+from kmuted.tts.cloud import CLOUD_CLASSES
 from kmuted.tts.edge import EdgeEngine
 from kmuted.tts.piper_engine import PiperEngine
 from kmuted.tts.rvc import RVCClient
 from kmuted.tts.sapi import SapiEngine
+from kmuted.i18n import tr
 
 log = logging.getLogger(__name__)
 
@@ -59,10 +61,18 @@ def cache_key(text: str, profile: VoiceProfile) -> str:
 
 
 class SpeechService:
-    def __init__(self, rvc_url: str = "http://127.0.0.1:5050", engines: dict[str, TTSEngine] | None = None) -> None:
-        self.engines: dict[str, TTSEngine] = engines or {
-            e.key: e for e in (EdgeEngine(), SapiEngine(), PiperEngine())
-        }
+    def __init__(
+        self,
+        rvc_url: str = "http://127.0.0.1:5050",
+        engines: dict[str, TTSEngine] | None = None,
+        cloud: CloudSettings | None = None,
+    ) -> None:
+        self._cloud = cloud or CloudSettings()
+        if engines is None:
+            local = [EdgeEngine(), SapiEngine(), PiperEngine()]
+            remote = [cls(lambda: self._cloud) for cls in CLOUD_CLASSES]
+            engines = {e.key: e for e in local + remote}
+        self.engines: dict[str, TTSEngine] = engines
         self.rvc = RVCClient(rvc_url)
         self._memory: OrderedDict[str, _Cached] = OrderedDict()
         self._memory_bytes = 0
@@ -97,7 +107,7 @@ class SpeechService:
     def synthesize(self, text: str, profile: VoiceProfile, persist: bool = False) -> Clip:
         text = text.strip()
         if not text:
-            raise TTSError("Пустой текст")
+            raise TTSError(tr("Пустой текст"))
         key = cache_key(text, profile)
         clip = self._memory_get(key) or self._disk_get(key)
         if clip is None:
@@ -108,6 +118,14 @@ class SpeechService:
         elif persist:
             self._disk_put(key, clip)
         return Clip(apply_gain(clip.samples, profile.volume), clip.sample_rate)
+
+    def set_cloud(self, cloud: CloudSettings) -> None:
+        """New API keys: forget cached voice lists of cloud engines."""
+        self._cloud = cloud
+        for engine in self.engines.values():
+            forget = getattr(engine, "forget", None)
+            if forget:
+                forget()
 
     def clear_cache(self) -> None:
         with self._lock:
@@ -126,7 +144,7 @@ class SpeechService:
     def _render(self, text: str, profile: VoiceProfile) -> Clip:
         engine = self.engines.get(profile.engine)
         if engine is None:
-            raise TTSError(f"Неизвестный движок: {profile.engine}")
+            raise TTSError(tr("Неизвестный движок: {name}", name=profile.engine))
         reason = engine.availability()
         if reason:
             raise TTSError(reason)
@@ -135,7 +153,7 @@ class SpeechService:
             clip = self.rvc.convert(prepare_clip(clip), profile.rvc_model, profile.rvc_pitch, profile.rvc_method)
         clip = prepare_clip(clip)
         if len(clip.samples) == 0:
-            raise TTSError("Голос вернул тишину")
+            raise TTSError(tr("Голос вернул тишину"))
         return clip
 
     def _warm_one(self, text: str, profile: VoiceProfile) -> None:

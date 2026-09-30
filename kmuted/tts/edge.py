@@ -17,6 +17,7 @@ from kmuted import paths
 from kmuted.audio.dsp import Clip
 from kmuted.config import VoiceProfile
 from kmuted.tts.base import TTSEngine, TTSError, VoiceInfo
+from kmuted.i18n import tr
 
 log = logging.getLogger(__name__)
 
@@ -59,7 +60,7 @@ def decode_audio_bytes(data: bytes) -> tuple[np.ndarray, int]:
         return np.frombuffer(decoded.samples, dtype=np.float32).copy(), decoded.sample_rate
     except Exception as exc:
         errors.append(f"miniaudio: {exc}")
-    raise TTSError("Не удалось декодировать аудио (" + "; ".join(errors) + "). Обновите пакет soundfile.")
+    raise TTSError(tr("Не удалось декодировать аудио (") + "; ".join(errors) + tr("). Обновите пакет soundfile."))
 
 
 def _friendly_name(short_name: str) -> str:
@@ -81,7 +82,7 @@ class EdgeEngine(TTSEngine):
         try:
             import edge_tts  # noqa: F401
         except ImportError:
-            return "Не установлен пакет edge-tts (pip install edge-tts)"
+            return tr("Не установлен пакет edge-tts (pip install edge-tts)")
         return ""
 
     def list_voices(self, refresh: bool = False) -> list[VoiceInfo]:
@@ -134,7 +135,7 @@ class EdgeEngine(TTSEngine):
         try:
             import edge_tts
         except ImportError as exc:
-            raise TTSError("Не установлен пакет edge-tts") from exc
+            raise TTSError(tr("Не установлен пакет edge-tts")) from exc
 
         voice = profile.voice or "ru-RU-DmitryNeural"
 
@@ -156,8 +157,8 @@ class EdgeEngine(TTSEngine):
         try:
             data = asyncio.run(run())
         except Exception as exc:
-            raise TTSError(f"Edge TTS: {exc or type(exc).__name__}. Проверьте интернет или выберите офлайн-голос.") from exc
+            raise TTSError(tr("Edge TTS: {error}. Проверьте интернет или выберите офлайн-голос.", error=exc or type(exc).__name__)) from exc
         if not data:
-            raise TTSError("Edge TTS вернул пустой ответ (возможно, неверное имя голоса)")
+            raise TTSError(tr("Edge TTS вернул пустой ответ (возможно, неверное имя голоса)"))
         samples, rate = decode_audio_bytes(data)
         return Clip(samples, rate)

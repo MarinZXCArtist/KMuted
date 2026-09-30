@@ -28,6 +28,32 @@ DANGER = "#ff5c7a"
 SUCCESS = "#3ddc97"
 WARNING = "#ffb454"
 
+# accent palettes: (accent, hover, deep, gradient end, highlight)
+ACCENTS = {
+    "violet": ("#7c5cff", "#8f74ff", "#5b3fe0", "#5b8cff", "#22d3ee"),
+    "blue": ("#3b82f6", "#5b9bff", "#2563eb", "#22d3ee", "#22d3ee"),
+    "cyan": ("#06b6d4", "#22d3ee", "#0891b2", "#3b82f6", "#a78bfa"),
+    "pink": ("#ec4899", "#f472b6", "#db2777", "#a855f7", "#22d3ee"),
+    "green": ("#10b981", "#34d399", "#059669", "#22d3ee", "#a3e635"),
+    "orange": ("#f97316", "#fb923c", "#ea580c", "#f43f5e", "#facc15"),
+    "red": ("#ef4444", "#f87171", "#dc2626", "#f97316", "#fbbf24"),
+}
+ACCENT_NAMES = {
+    "violet": "Фиолетовый",
+    "blue": "Синий",
+    "cyan": "Бирюзовый",
+    "pink": "Розовый",
+    "green": "Зелёный",
+    "orange": "Оранжевый",
+    "red": "Красный",
+}
+
+
+def set_accent(name: str) -> None:
+    global ACCENT, ACCENT_HOVER, ACCENT_DEEP, BLUE, ACCENT_2
+    ACCENT, ACCENT_HOVER, ACCENT_DEEP, BLUE, ACCENT_2 = ACCENTS.get(name, ACCENTS["violet"])
+
+
 RADIUS = 12
 FONT_FAMILY = "Segoe UI Variable Text" if sys.platform == "win32" else "Segoe UI"
 
@@ -37,7 +63,8 @@ def rgba(hex_color: str, alpha: float) -> str:
     return f"rgba({c.red()}, {c.green()}, {c.blue()}, {alpha})"
 
 
-QSS = f"""
+def build_qss() -> str:
+    return f"""
 * {{ outline: 0; }}
 QMainWindow, QDialog {{ background: {BG}; }}
 QWidget {{ color: {TEXT}; font-size: 10pt; }}
@@ -225,5 +252,5 @@ def apply_theme(app: QApplication) -> None:
     font.setPointSizeF(10)
     font.setHintingPreference(QFont.PreferNoHinting)
     app.setFont(font)
-    app.setStyleSheet(QSS)
+    app.setStyleSheet(build_qss())
     QPixmapCache.setCacheLimit(4096)  # KB; keeps icon caches small

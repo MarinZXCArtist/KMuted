@@ -19,24 +19,27 @@ from PySide6.QtWidgets import (
 )
 
 from kmuted.config import Phrase
+from kmuted.i18n import language
+from kmuted.textvars import VARIABLES
 from kmuted.ui import theme
 from kmuted.ui.components import EmptyState, Keycaps, icon_button, make_button, page_header
 from kmuted.ui.icons import icon
 from kmuted.ui.widgets import HotkeyEdit, fill_voice_combo
+from kmuted.i18n import tr
 
 
 class PhraseDialog(QDialog):
     def __init__(self, controller, phrase: Phrase, parent=None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Фраза")
+        self.setWindowTitle(tr("Фраза"))
         self.setMinimumWidth(520)
         self.controller = controller
         self.phrase = phrase
 
-        title = QLabel("Новая фраза" if not phrase.text else "Изменить фразу")
+        title = QLabel(tr("Новая фраза") if not phrase.text else tr("Изменить фразу"))
         title.setObjectName("h2")
         self.text = QPlainTextEdit(phrase.text)
-        self.text.setPlaceholderText("Что сказать, например: «Спасибо за игру!»")
+        self.text.setPlaceholderText(tr("Что сказать, например: «Спасибо за игру!»"))
         self.text.setFixedHeight(96)
         self.hotkey = HotkeyEdit(phrase.hotkey)
         self.voice = QComboBox()
@@ -45,24 +48,31 @@ class PhraseDialog(QDialog):
         self.warning.setStyleSheet(f"color: {theme.WARNING};")
         self.warning.setWordWrap(True)
         self.hotkey.changed.connect(self._check_conflict)
+        vars_hint = QLabel(
+            tr("Можно вставлять: {vars}", vars="  ".join(f"<b>{{{names[0] if language() == 'ru' else names[1]}}}</b>" for names, _d in VARIABLES))
+        )
+        vars_hint.setObjectName("hint")
+        vars_hint.setWordWrap(True)
+        vars_hint.setToolTip("\n".join(f"{{{n[0]}}} / {{{n[1]}}} — {tr(d)}" for n, d in VARIABLES))
 
-        test = make_button("Прослушать", "headset")
-        test.setToolTip("Только в ваши наушники")
+        test = make_button(tr("Прослушать"), "headset")
+        test.setToolTip(tr("Только в ваши наушники"))
         test.clicked.connect(self._preview)
 
         form = QFormLayout()
         form.setSpacing(12)
         form.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        form.addRow("Текст", self.text)
-        form.addRow("Горячая клавиша", self.hotkey)
-        form.addRow("Голос", self.voice)
+        form.addRow(tr("Текст"), self.text)
+        form.addRow("", vars_hint)
+        form.addRow(tr("Горячая клавиша"), self.hotkey)
+        form.addRow(tr("Голос"), self.voice)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         ok = buttons.button(QDialogButtonBox.Ok)
-        ok.setText("Сохранить")
+        ok.setText(tr("Сохранить"))
         ok.setObjectName("primary")
         ok.setIcon(icon("check", "white", 16))
-        buttons.button(QDialogButtonBox.Cancel).setText("Отмена")
+        buttons.button(QDialogButtonBox.Cancel).setText(tr("Отмена"))
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
 
@@ -113,7 +123,7 @@ class PhraseCard(QFrame):
         lay.setContentsMargins(12, 10, 10, 10)
         lay.setSpacing(12)
 
-        play = icon_button("play", "Сказать в микрофон", theme.ACCENT_2, 16)
+        play = icon_button("play", tr("Сказать в микрофон"), theme.ACCENT_2, 16)
         play.setFixedSize(38, 38)
         play.setStyleSheet(
             f"QToolButton {{ padding: 0px; background: {theme.rgba(theme.ACCENT_2, 0.12)}; border: 1px solid "
@@ -137,7 +147,7 @@ class PhraseCard(QFrame):
         chip.setObjectName("chip")
         meta.addWidget(chip)
         if conflict:
-            warn = QLabel("клавиша занята")
+            warn = QLabel(tr("клавиша занята"))
             warn.setObjectName("chipWarn")
             warn.setToolTip(conflict)
             meta.addWidget(warn)
@@ -145,17 +155,17 @@ class PhraseCard(QFrame):
         col.addLayout(meta)
         lay.addLayout(col, 1)
 
-        lay.addWidget(Keycaps(phrase.hotkey, "без клавиши"), 0, Qt.AlignVCenter)
+        lay.addWidget(Keycaps(phrase.hotkey, tr("без клавиши")), 0, Qt.AlignVCenter)
 
         self.actions = QWidget()
         al = QHBoxLayout(self.actions)
         al.setContentsMargins(0, 0, 0, 0)
         al.setSpacing(0)
         for name, tip, signal, arg in (
-            ("up", "Выше", self.move_requested, -1),
-            ("down", "Ниже", self.move_requested, 1),
-            ("edit", "Изменить", self.edit_requested, None),
-            ("trash", "Удалить", self.remove_requested, None),
+            ("up", tr("Выше"), self.move_requested, -1),
+            ("down", tr("Ниже"), self.move_requested, 1),
+            ("edit", tr("Изменить"), self.edit_requested, None),
+            ("trash", tr("Удалить"), self.remove_requested, None),
         ):
             btn = icon_button(name, tip, theme.DANGER if name == "trash" else theme.MUTED, 15)
             btn.clicked.connect(lambda _c=False, s=signal, a=arg: s.emit(a) if a is not None else s.emit())
@@ -182,12 +192,12 @@ class PhrasesPage(QWidget):
         self.controller = controller
 
         self.search = QLineEdit()
-        self.search.setPlaceholderText("Поиск по фразам…")
+        self.search.setPlaceholderText(tr("Поиск по фразам…"))
         self.search.setClearButtonEnabled(True)
         self.search.addAction(icon("search", theme.FAINT, 16), QLineEdit.LeadingPosition)
         self.search.setFixedWidth(260)
         self.search.textChanged.connect(lambda _t: self.refresh())
-        add = make_button("Добавить фразу", "plus", "primary")
+        add = make_button(tr("Добавить фразу"), "plus", "primary")
         add.clicked.connect(self.add)
         tools = QWidget()
         tl = QHBoxLayout(tools)
@@ -211,8 +221,8 @@ class PhrasesPage(QWidget):
         lay.setSpacing(12)
         lay.addWidget(
             page_header(
-                "Быстрые фразы",
-                "Нажали горячую клавишу — фраза сразу звучит в микрофоне. Озвучиваются заранее, поэтому без задержки.",
+                tr("Быстрые фразы"),
+                tr("Нажали горячую клавишу — фраза сразу звучит в микрофоне. Озвучиваются заранее, поэтому без задержки."),
                 tools,
             )
         )
@@ -240,19 +250,19 @@ class PhrasesPage(QWidget):
         query = self.search.text().strip().lower()
         shown = [p for p in cfg.phrases if not query or query in p.text.lower()]
         if not cfg.phrases:
-            add = make_button("Добавить первую фразу", "plus", "primary")
+            add = make_button(tr("Добавить первую фразу"), "plus", "primary")
             add.clicked.connect(self.add)
             self.list_box.addWidget(
-                EmptyState("phrases", "Фраз пока нет", "Добавьте фразы, которые часто говорите, и повесьте их на клавиши.", add)
+                EmptyState("phrases", tr("Фраз пока нет"), tr("Добавьте фразы, которые часто говорите, и повесьте их на клавиши."), add)
             )
             return
         if not shown:
-            self.list_box.addWidget(EmptyState("search", "Ничего не найдено", f"Нет фраз с «{query}»."))
+            self.list_box.addWidget(EmptyState("search", tr("Ничего не найдено"), tr("Нет фраз с «{query}».", query=query)))
             return
         for phrase in shown:
             voice = cfg.voice_by_id(phrase.voice_id)
             conflict = self.controller.hotkey_conflict(phrase.hotkey, f"phrase:{phrase.id}")
-            card = PhraseCard(phrase, voice.name if voice else "голос по умолчанию", conflict)
+            card = PhraseCard(phrase, voice.name if voice else tr("голос по умолчанию"), conflict)
             card.play_requested.connect(lambda p=phrase: self.controller.say(p.text, p.voice_id, persist=True))
             card.edit_requested.connect(lambda p=phrase: self.edit_phrase(p))
             card.remove_requested.connect(lambda p=phrase: self.remove_phrase(p))
@@ -276,7 +286,7 @@ class PhrasesPage(QWidget):
         if phrase in phrases:
             phrases.remove(phrase)
             self.controller.edited("phrases")
-            self.controller.notify.emit("Фраза удалена", "info")
+            self.controller.notify.emit(tr("Фраза удалена"), "info")
 
     def move_phrase(self, phrase: Phrase, step: int) -> None:
         phrases = self.controller.config.phrases

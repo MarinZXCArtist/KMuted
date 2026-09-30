@@ -40,6 +40,7 @@ from PySide6.QtWidgets import (
 from kmuted.hotkeys.keys import MODIFIERS, key_display, parse_combo
 from kmuted.ui import theme
 from kmuted.ui.icons import icon, icon_pixmap
+from kmuted.i18n import tr
 
 # --- buttons -------------------------------------------------------------------------
 
@@ -587,12 +588,15 @@ class FadeStack(QStackedWidget):
 class Toast(QFrame):
     """Small notification that slides in at the bottom-right of ``host``."""
 
-    _COLORS = {"info": theme.ACCENT, "success": theme.SUCCESS, "error": theme.DANGER, "warning": theme.WARNING}
     _ICONS = {"info": "info", "success": "check", "error": "alert", "warning": "alert"}
+
+    @staticmethod
+    def _color(kind: str) -> str:
+        return {"success": theme.SUCCESS, "error": theme.DANGER, "warning": theme.WARNING}.get(kind, theme.ACCENT)
 
     def __init__(self, host: QWidget, text: str, kind: str = "info", timeout_ms: int = 3800) -> None:
         super().__init__(host)
-        color = self._COLORS.get(kind, theme.ACCENT)
+        color = self._color(kind)
         self.setObjectName("toast")
         c = QColor(color)
         self.setStyleSheet(
@@ -607,7 +611,7 @@ class Toast(QFrame):
         label = QLabel(text)
         label.setWordWrap(True)
         label.setMaximumWidth(360)
-        close = icon_button("x", "Закрыть", size=14)
+        close = icon_button("x", tr("Закрыть"), size=14)
         close.clicked.connect(self.dismiss)
         lay.addWidget(pic, 0, Qt.AlignTop)
         lay.addWidget(label, 1)
@@ -724,3 +728,54 @@ def rounded_path(rect: QRectF, radius: float) -> QPainterPath:
 
 def ease_towards(value: float, target: float, factor: float = 0.3) -> float:
     return target if math.isclose(value, target, abs_tol=0.01) else value + (target - value) * factor
+
+
+# --- level meter ---------------------------------------------------------------------
+
+
+class LevelMeter(QWidget):
+    """Horizontal VU bar (dB scale) with a falling peak marker."""
+
+    FLOOR_DB = -60.0
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self._level = 0.0  # 0..1 on the dB scale
+        self._peak = 0.0
+        self.setFixedHeight(12)
+        self.setMinimumWidth(160)
+
+    @classmethod
+    def to_scale(cls, amplitude: float) -> float:
+        if amplitude <= 1e-6:
+            return 0.0
+        db = 20.0 * math.log10(min(1.0, amplitude))
+        return max(0.0, 1.0 - db / cls.FLOOR_DB)
+
+    def push(self, amplitude: float) -> None:
+        target = self.to_scale(amplitude)
+        # fast attack, slow release
+        self._level = target if target > self._level else self._level * 0.82 + target * 0.18
+        self._peak = max(target, self._peak - 0.012)
+        self.update()
+
+    def paintEvent(self, _event) -> None:  # noqa: N802
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        r = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        p.setPen(Qt.NoPen)
+        p.setBrush(QColor(theme.SURFACE_3))
+        p.drawRoundedRect(r, r.height() / 2, r.height() / 2)
+        if self._level > 0.005:
+            fill = QRectF(r.left(), r.top(), max(r.height(), r.width() * self._level), r.height())
+            grad = QLinearGradient(r.left(), 0, r.right(), 0)
+            grad.setColorAt(0.0, QColor(theme.SUCCESS))
+            grad.setColorAt(0.7, QColor(theme.WARNING))
+            grad.setColorAt(1.0, QColor(theme.DANGER))
+            p.setBrush(grad)
+            p.drawRoundedRect(fill, r.height() / 2, r.height() / 2)
+        if self._peak > 0.01:
+            x = r.left() + r.width() * self._peak
+            p.setBrush(QColor("white"))
+            p.drawRoundedRect(QRectF(x - 1.5, r.top(), 3, r.height()), 1.5, 1.5)
+        p.end()

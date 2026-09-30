@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
 from kmuted import paths
 from kmuted.tts import piper_catalog
 from kmuted.ui.widgets import run_in_background
+from kmuted.i18n import tr
 
 
 class _Progress(QObject):
@@ -32,7 +33,7 @@ class PiperDownloadDialog(QDialog):
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Скачать голоса Piper")
+        self.setWindowTitle(tr("Скачать голоса Piper"))
         self.resize(560, 520)
         self._catalog: list[piper_catalog.CatalogVoice] = []
         self._cancel = threading.Event()
@@ -42,20 +43,20 @@ class PiperDownloadDialog(QDialog):
         self.lang.currentIndexChanged.connect(self._fill_list)
         self.list = QListWidget()
         self.list.itemDoubleClicked.connect(lambda _i: self._download())
-        self.status = QLabel("Загружаю каталог…")
+        self.status = QLabel(tr("Загружаю каталог…"))
         self.status.setObjectName("muted")
         self.status.setWordWrap(True)
         self.progress = QProgressBar()
         self.progress.hide()
 
-        self.download_btn = QPushButton("Скачать")
+        self.download_btn = QPushButton(tr("Скачать"))
         self.download_btn.setObjectName("primary")
         self.download_btn.clicked.connect(self._download)
-        close = QPushButton("Закрыть")
+        close = QPushButton(tr("Закрыть"))
         close.clicked.connect(self.reject)
 
         top = QHBoxLayout()
-        top.addWidget(QLabel("Язык"))
+        top.addWidget(QLabel(tr("Язык")))
         top.addWidget(self.lang, 1)
         buttons = QHBoxLayout()
         buttons.addStretch(1)
@@ -63,8 +64,8 @@ class PiperDownloadDialog(QDialog):
         buttons.addWidget(close)
 
         info = QLabel(
-            "Голоса из официального каталога Piper (huggingface.co/rhasspy/piper-voices). "
-            "Качество: x_low/low — быстрее, medium — оптимально, high — лучше звучит."
+            tr("Голоса из официального каталога Piper (huggingface.co/rhasspy/piper-voices). "
+            "Качество: x_low/low — быстрее, medium — оптимально, high — лучше звучит.")
         )
         info.setObjectName("hint")
         info.setWordWrap(True)
@@ -82,10 +83,10 @@ class PiperDownloadDialog(QDialog):
     def _catalog_loaded(self, catalog, error) -> None:
         if error is not None or not catalog:
             self._catalog = piper_catalog.fallback_catalog()
-            self.status.setText(f"Каталог недоступен ({error}), показан сокращённый список.")
+            self.status.setText(tr("Каталог недоступен ({error}), показан сокращённый список.", error=error))
         else:
             self._catalog = catalog
-            self.status.setText(f"Доступно голосов: {len(catalog)}")
+            self.status.setText(tr("Доступно голосов: {n}", n=len(catalog)))
         langs = sorted({(v.language, v.language_name) for v in self._catalog}, key=lambda t: (not t[0].startswith("ru"), t[0]))
         self.lang.blockSignals(True)
         self.lang.clear()
@@ -101,8 +102,8 @@ class PiperDownloadDialog(QDialog):
         for voice in self._catalog:
             if code and voice.language != code:
                 continue
-            size = f", {voice.size_mb:.0f} МБ" if voice.size_bytes else ""
-            speakers = f", голосов: {voice.num_speakers}" if voice.num_speakers > 1 else ""
+            size = tr(", {mb} МБ", mb=f"{voice.size_mb:.0f}") if voice.size_bytes else ""
+            speakers = tr(", голосов: {n}", n=voice.num_speakers) if voice.num_speakers > 1 else ""
             mark = "✓ " if voice.key in installed else ""
             item = QListWidgetItem(f"{mark}{voice.name} — {voice.quality}{speakers}{size}")
             item.setData(Qt.UserRole, voice)
@@ -118,7 +119,7 @@ class PiperDownloadDialog(QDialog):
         self.download_btn.setEnabled(False)
         self.progress.setValue(0)
         self.progress.show()
-        self.status.setText(f"Скачиваю {voice.key}…")
+        self.status.setText(tr("Скачиваю {name}…", name=voice.key))
 
         relay = _Progress(self)
         relay.progress.connect(self._on_progress, Qt.QueuedConnection)
@@ -150,9 +151,9 @@ class PiperDownloadDialog(QDialog):
         self.download_btn.setEnabled(True)
         self.progress.hide()
         if error is not None:
-            self.status.setText(f"Ошибка загрузки: {error}")
+            self.status.setText(tr("Ошибка загрузки: {error}", error=error))
             return
-        self.status.setText("Готово! Голос добавлен в список Piper.")
+        self.status.setText(tr("Готово! Голос добавлен в список Piper."))
         self._fill_list()
         self.downloaded.emit(path)
 

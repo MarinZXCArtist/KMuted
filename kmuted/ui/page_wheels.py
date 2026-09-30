@@ -27,6 +27,7 @@ from kmuted.ui.icons import icon
 from kmuted.ui.overlay_wheel import WheelPreview
 from kmuted.ui.components import make_button
 from kmuted.ui.widgets import HotkeyEdit, fill_voice_combo, page_header
+from kmuted.i18n import tr
 
 _DIRECTIONS_8 = ["↑", "↗", "→", "↘", "↓", "↙", "←", "↖"]
 
@@ -41,9 +42,9 @@ class WheelsPage(QWidget):
         self.list = QListWidget()
         self.list.setFixedWidth(180)
         self.list.currentRowChanged.connect(self._load_wheel)
-        add = make_button("Колесо", "plus", "primary")
+        add = make_button(tr("Колесо"), "plus", "primary")
         add.clicked.connect(self.add_wheel)
-        remove = make_button("Удалить", "trash", "danger")
+        remove = make_button(tr("Удалить"), "trash", "danger")
         remove.clicked.connect(self.remove_wheel)
         left_buttons = QHBoxLayout()
         left_buttons.addWidget(add)
@@ -66,12 +67,12 @@ class WheelsPage(QWidget):
 
         form = QFormLayout()
         form.setSpacing(8)
-        form.addRow("Название", self.name)
-        form.addRow("Горячая клавиша", self.hotkey)
-        form.addRow("Секторов", self.count)
+        form.addRow(tr("Название"), self.name)
+        form.addRow(tr("Горячая клавиша"), self.hotkey)
+        form.addRow(tr("Секторов"), self.count)
 
         self.table = QTableWidget(0, 3)
-        self.table.setHorizontalHeaderLabels(["", "Надпись", "Что сказать"])
+        self.table.setHorizontalHeaderLabels(["", tr("Надпись"), tr("Что сказать")])
         self.table.verticalHeader().hide()
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SingleSelection)
@@ -90,14 +91,18 @@ class WheelsPage(QWidget):
 
         self.slot_voice = QComboBox()
         self.slot_voice.currentIndexChanged.connect(self._voice_changed)
-        self.slot_voice_label = QLabel("Голос сектора")
+        self.slot_sound = QComboBox()
+        self.slot_sound.setToolTip(tr("Вместо фразы сектор может проиграть звук из саундборда"))
+        self.slot_sound.currentIndexChanged.connect(self._sound_changed)
+        self.slot_voice_label = QLabel(tr("Голос сектора"))
         voice_row = QHBoxLayout()
         voice_row.addWidget(self.slot_voice_label)
         voice_row.addWidget(self.slot_voice, 1)
+        voice_row.addWidget(self.slot_sound, 1)
 
         hint = QLabel(
-            "Двойной клик по ячейке — редактировать. Пустой сектор на колесе не выбирается. "
-            "Надпись — короткий текст на колесе, «Что сказать» — полная фраза."
+            tr("Двойной клик по ячейке — редактировать. Пустой сектор на колесе не выбирается. "
+            "Надпись — короткий текст на колесе, «Что сказать» — полная фраза.")
         )
         hint.setObjectName("hint")
         hint.setWordWrap(True)
@@ -112,7 +117,7 @@ class WheelsPage(QWidget):
         # right: preview
         self.preview = WheelPreview()
         self.preview.setMinimumSize(280, 280)
-        test = make_button("Сказать выбранную фразу", "play")
+        test = make_button(tr("Сказать выбранную фразу"), "play")
         test.clicked.connect(self._say_selected)
         right_box = QWidget()
         right_box.setFixedWidth(300)
@@ -127,15 +132,15 @@ class WheelsPage(QWidget):
         body.addLayout(middle, 1)
         body.addWidget(right_box)
 
-        self.editor_widgets = [self.name, self.hotkey, self.count, self.table, self.slot_voice, test]
+        self.editor_widgets = [self.name, self.hotkey, self.count, self.table, self.slot_voice, self.slot_sound, test]
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(28, 24, 28, 12)
         lay.addWidget(
             page_header(
-                "Колёса фраз",
-                "Зажмите клавишу колеса, поведите мышью в сторону фразы и отпустите — фраза прозвучит. "
-                "Работает поверх игры (в оконном или «оконном без рамки» режиме).",
+                tr("Колёса фраз"),
+                tr("Зажмите клавишу колеса, поведите мышью в сторону фразы и отпустите — фраза прозвучит. "
+                "Работает поверх игры (в оконном или «оконном без рамки» режиме)."),
             )
         )
         lay.addLayout(body, 1)
@@ -161,7 +166,7 @@ class WheelsPage(QWidget):
         self.list.clear()
         for w in wheels:
             key = format_combo(w.hotkey)
-            item = QListWidgetItem(icon("wheel", theme.ACCENT, 18), f"{w.name}\n{key or 'без клавиши'}")
+            item = QListWidgetItem(icon("wheel", theme.ACCENT, 18), f"{w.name}\n{key or tr('без клавиши')}")
             self.list.addItem(item)
         self.list.blockSignals(False)
         if wheels:
@@ -208,15 +213,23 @@ class WheelsPage(QWidget):
         self.slot_voice.blockSignals(True)
         fill_voice_combo(self.slot_voice, self.controller.config.voices, slot.voice_id if slot else "")
         self.slot_voice.blockSignals(False)
-        self.slot_voice.setEnabled(slot is not None)
-        self.slot_voice_label.setText(f"Голос сектора {row + 1}" if slot else "Голос сектора")
+        self.slot_voice.setEnabled(slot is not None and not (slot and slot.sound_id))
+        self.slot_sound.blockSignals(True)
+        self.slot_sound.clear()
+        self.slot_sound.addItem(tr("♪ без звука — говорить фразу"), "")
+        for snd in self.controller.config.sounds:
+            self.slot_sound.addItem(f"♪ {snd.name}", snd.id)
+        self.slot_sound.setCurrentIndex(max(0, self.slot_sound.findData(slot.sound_id if slot else "")))
+        self.slot_sound.setEnabled(slot is not None and bool(self.controller.config.sounds))
+        self.slot_sound.blockSignals(False)
+        self.slot_voice_label.setText(tr("Голос сектора {n}", n=row + 1) if slot else tr("Голос сектора"))
         self._update_preview()
 
     def _update_preview(self) -> None:
         wheel = self._wheel()
         if wheel is None:
             return
-        self.preview.set_wheel(wheel.name, [s.caption for s in wheel.slots], self.table.currentRow())
+        self.preview.set_wheel(wheel.name, [self.controller.slot_caption(s) for s in wheel.slots], self.table.currentRow())
 
     def _check_conflict(self) -> None:
         wheel = self._wheel()
@@ -234,7 +247,7 @@ class WheelsPage(QWidget):
         wheel = self._wheel()
         if wheel is None or self._loading:
             return
-        name = self.name.text().strip() or "Колесо"
+        name = self.name.text().strip() or tr("Колесо")
         if name != wheel.name:
             wheel.name = name
             self._changed()
@@ -273,6 +286,15 @@ class WheelsPage(QWidget):
             return
         self._changed()
 
+    def _sound_changed(self) -> None:
+        wheel = self._wheel()
+        row = self.table.currentRow()
+        if wheel is None or self._loading or not 0 <= row < len(wheel.slots):
+            return
+        wheel.slots[row].sound_id = self.slot_sound.currentData() or ""
+        self.slot_voice.setEnabled(not wheel.slots[row].sound_id)
+        self._changed()
+
     def _voice_changed(self) -> None:
         wheel = self._wheel()
         row = self.table.currentRow()
@@ -292,7 +314,7 @@ class WheelsPage(QWidget):
 
     def add_wheel(self) -> None:
         wheels = self.controller.config.wheels
-        wheels.append(Wheel(name=f"Колесо {len(wheels) + 1}"))
+        wheels.append(Wheel(name=tr("Колесо {n}", n=len(wheels) + 1)))
         self.controller.edited("wheels")
         self.refresh_list(select=len(wheels) - 1)
         self.name.setFocus()

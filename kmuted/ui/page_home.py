@@ -30,8 +30,10 @@ from kmuted.ui.components import (
     make_button,
 )
 from kmuted.ui.icons import icon, icon_pixmap, load_asset_pixmap
+from kmuted.i18n import tr
 
 ENGINE_NAMES = {"edge": "Edge · онлайн", "sapi": "Windows · офлайн", "piper": "Piper · офлайн"}
+CLOUD_NAME = "Облако · {name}"
 
 
 class Hero(QFrame):
@@ -187,11 +189,11 @@ class HomePage(QWidget):
         lay = QVBoxLayout(hero)
         lay.setContentsMargins(28, 24, 28, 24)
         lay.setSpacing(6)
-        eyebrow = QLabel("KMUTED · ГОЛОС ДЛЯ ТЕХ, КТО НЕ МОЖЕТ ГОВОРИТЬ")
+        eyebrow = QLabel(tr("KMUTED · ГОЛОС ДЛЯ ТЕХ, КТО НЕ МОЖЕТ ГОВОРИТЬ"))
         eyebrow.setObjectName("eyebrow")
-        title = QLabel("Говорите в войсе — текстом")
+        title = QLabel(tr("Говорите в войсе — текстом"))
         title.setStyleSheet("font-size: 22pt; font-weight: 750; color: white;")
-        sub = QLabel("Пишете фразу — друзья в Discord и в игре слышат её голосом. Быстрые фразы и колесо — в один клик.")
+        sub = QLabel(tr("Пишете фразу — друзья в Discord и в игре слышат её голосом. Быстрые фразы и колесо — в один клик."))
         sub.setWordWrap(True)
         sub.setStyleSheet("color: rgba(255,255,255,0.75); font-size: 10.5pt;")
         sub.setMaximumWidth(560)
@@ -201,11 +203,11 @@ class HomePage(QWidget):
         lay.addStretch(1)
         row = QHBoxLayout()
         row.setSpacing(10)
-        write = make_button("Написать фразу", "send", "primary")
+        write = make_button(tr("Написать фразу"), "send", "primary")
         write.clicked.connect(self.controller.open_input)
         self.hero_keys = Keycaps()
-        test = make_button("Проверить микрофон", "mic")
-        test.clicked.connect(lambda: self.controller.say("Проверка связи. Меня хорошо слышно?"))
+        test = make_button(tr("Проверить микрофон"), "mic")
+        test.clicked.connect(lambda: self.controller.say(tr("Проверка связи. Меня хорошо слышно?")))
         row.addWidget(write)
         row.addWidget(self.hero_keys)
         row.addSpacing(8)
@@ -217,17 +219,17 @@ class HomePage(QWidget):
     def _build_tiles(self) -> QGridLayout:
         grid = QGridLayout()
         grid.setSpacing(14)
-        self.tile_mic = StatusTile("mic", "Виртуальный микрофон")
-        self.tile_voice = StatusTile("voices", "Голос по умолчанию")
-        self.tile_keys = StatusTile("keyboard", "Горячие клавиши")
+        self.tile_mic = StatusTile("mic", tr("Виртуальный микрофон"))
+        self.tile_voice = StatusTile("voices", tr("Голос по умолчанию"))
+        self.tile_keys = StatusTile("keyboard", tr("Горячие клавиши"))
         self.keys_switch = ToggleSwitch()
         self.keys_switch.toggled.connect(self._toggle_hotkeys)
         self.tile_keys.side.addWidget(self.keys_switch, 0, Qt.AlignVCenter)
-        voice_btn = icon_button("edit", "Выбрать голос")
-        voice_btn.clicked.connect(lambda: self.navigate.emit(3))
+        voice_btn = icon_button("edit", tr("Выбрать голос"))
+        voice_btn.clicked.connect(lambda: self.navigate.emit(4))
         self.tile_voice.side.addWidget(voice_btn, 0, Qt.AlignVCenter)
-        mic_btn = icon_button("settings", "Настроить звук")
-        mic_btn.clicked.connect(lambda: self.navigate.emit(4))
+        mic_btn = icon_button("settings", tr("Настроить звук"))
+        mic_btn.clicked.connect(lambda: self.navigate.emit(5))
         self.tile_mic.side.addWidget(mic_btn, 0, Qt.AlignVCenter)
         for i, tile in enumerate((self.tile_mic, self.tile_voice, self.tile_keys)):
             grid.addWidget(tile, 0, i)
@@ -241,15 +243,15 @@ class HomePage(QWidget):
         head = QHBoxLayout()
         pic = QLabel()
         pic.setPixmap(icon_pixmap("alert", theme.WARNING, 22))
-        t = QLabel("Осталось подключить виртуальный микрофон")
+        t = QLabel(tr("Осталось подключить виртуальный микрофон"))
         t.setObjectName("h2")
         head.addWidget(pic)
         head.addWidget(t, 1)
         lay.addLayout(head)
         text = QLabel(
-            "Windows не даёт программам говорить в чужой микрофон напрямую, поэтому нужен бесплатный "
+            tr("Windows не даёт программам говорить в чужой микрофон напрямую, поэтому нужен бесплатный "
             "драйвер <b>VB-Audio Virtual Cable</b>. KMuted играет в <b>CABLE Input</b>, а Discord и игры "
-            "слушают <b>CABLE Output</b> как обычный микрофон."
+            "слушают <b>CABLE Output</b> как обычный микрофон.")
         )
         text.setWordWrap(True)
         text.setObjectName("muted")
@@ -260,9 +262,9 @@ class HomePage(QWidget):
         self.step_labels = []
         for i, step in enumerate(
             (
-                "Установите VB-Audio Virtual Cable (кнопка ниже скачает официальный установщик) и перезагрузите ПК",
-                "KMuted сам выберет «CABLE Input» — проверьте кнопкой «Я установил»",
-                "В Discord / игре: Настройки → Голос → Устройство ввода → «CABLE Output»",
+                tr("Установите VB-Audio Virtual Cable (кнопка ниже скачает официальный установщик) и перезагрузите ПК"),
+                tr("KMuted сам выберет «CABLE Input» — проверьте кнопкой «Я установил»"),
+                tr("В Discord / игре: Настройки → Голос → Устройство ввода → «CABLE Output»"),
             ),
             start=1,
         ):
@@ -283,11 +285,11 @@ class HomePage(QWidget):
         self.cable_progress.hide()
         lay.addWidget(self.cable_progress)
         row = QHBoxLayout()
-        self.install_btn = make_button("Скачать и установить VB-Cable", "download", "primary")
+        self.install_btn = make_button(tr("Скачать и установить VB-Cable"), "download", "primary")
         self.install_btn.clicked.connect(self._install_cable)
-        check = make_button("Я установил — проверить", "refresh")
+        check = make_button(tr("Я установил — проверить"), "refresh")
         check.clicked.connect(self._check_cable)
-        site = make_button("Сайт VB-Audio", "link", "ghost")
+        site = make_button(tr("Сайт VB-Audio"), "link", "ghost")
         site.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(cable.CABLE_PAGE)))
         row.addWidget(self.install_btn)
         row.addWidget(check)
@@ -302,11 +304,11 @@ class HomePage(QWidget):
         lay.setContentsMargins(18, 14, 18, 14)
         lay.setSpacing(6)
         head = QHBoxLayout()
-        t = QLabel("Недавнее")
+        t = QLabel(tr("Недавнее"))
         t.setObjectName("h2")
         head.addWidget(t)
         head.addStretch(1)
-        hint = QLabel("нажмите ▶, чтобы сказать снова")
+        hint = QLabel(tr("нажмите ▶, чтобы сказать снова"))
         hint.setObjectName("hint")
         head.addWidget(hint)
         lay.addLayout(head)
@@ -321,7 +323,7 @@ class HomePage(QWidget):
         lay = QVBoxLayout(box)
         lay.setContentsMargins(18, 14, 18, 14)
         lay.setSpacing(8)
-        t = QLabel("Шпаргалка")
+        t = QLabel(tr("Шпаргалка"))
         t.setObjectName("h2")
         lay.addWidget(t)
         self.cheat_grid = QGridLayout()
@@ -338,20 +340,22 @@ class HomePage(QWidget):
         cfg = c.config
         g = cfg.general
         if c.audio.mic_ready:
-            self.tile_mic.set(c.audio.mic.device.name, "подключён · другие вас слышат", True)
+            self.tile_mic.set(c.audio.mic.device.name, tr("подключён · другие вас слышат"), True)
         elif not c._audio_enabled:
-            self.tile_mic.set("Звук отключён", "запуск с --no-audio", False)
+            self.tile_mic.set(tr("Звук отключён"), tr("запуск с --no-audio"), False)
         else:
-            reason = c.audio.errors.get("mic", "не выбран")
-            self.tile_mic.set("Не подключён", reason[:60], False)
+            reason = c.audio.errors.get("mic", tr("не выбран"))
+            self.tile_mic.set(tr("Не подключён"), reason[:60], False)
         voice = cfg.active_voice()
         extra = " + RVC" if voice.rvc_enabled and voice.rvc_model else ""
-        self.tile_voice.set(voice.name, ENGINE_NAMES.get(voice.engine, voice.engine) + extra, True)
+        engine = ENGINE_NAMES.get(voice.engine)
+        engine = tr(engine) if engine else tr(CLOUD_NAME, name=voice.engine.capitalize())
+        self.tile_voice.set(voice.name, engine + extra, True)
         running = c.hotkeys.running
         if not running:
-            self.tile_keys.set("Недоступны", c.hotkeys.error[:60] or "запуск с --no-hotkeys", False)
+            self.tile_keys.set(tr("Недоступны"), c.hotkeys.error[:60] or tr("запуск с --no-hotkeys"), False)
         else:
-            self.tile_keys.set("Включены" if g.hotkeys_enabled else "На паузе", "работают поверх игр", g.hotkeys_enabled)
+            self.tile_keys.set(tr("Включены") if g.hotkeys_enabled else tr("На паузе"), tr("работают поверх игр"), g.hotkeys_enabled)
         self.keys_switch.blockSignals(True)
         self.keys_switch.setChecked(g.hotkeys_enabled)
         self.keys_switch.blockSignals(False)
@@ -366,7 +370,7 @@ class HomePage(QWidget):
         _clear_layout(self.recent_box)
         history = self.controller.config.history[:7]
         if not history:
-            empty = QLabel("Здесь появятся фразы, которые вы писали в окне ввода.")
+            empty = QLabel(tr("Здесь появятся фразы, которые вы писали в окне ввода."))
             empty.setObjectName("hint")
             empty.setWordWrap(True)
             self.recent_box.addWidget(empty)
@@ -382,7 +386,7 @@ class HomePage(QWidget):
             lbl.setToolTip(text)
             lbl.setMinimumWidth(10)
             lbl.setText(lbl.fontMetrics().elidedText(text, Qt.ElideRight, 420))
-            play = icon_button("play", "Сказать снова", theme.ACCENT_2, 14)
+            play = icon_button("play", tr("Сказать снова"), theme.ACCENT_2, 14)
             play.clicked.connect(lambda _c=False, t=text: self.controller.say(t))
             rl.addWidget(lbl, 1)
             rl.addWidget(play)
@@ -392,11 +396,11 @@ class HomePage(QWidget):
         _clear_layout(self.cheat_grid)
         cfg = self.controller.config
         g = cfg.general
-        rows = [(g.input_hotkey, "Окно ввода")]
-        rows += [(w.hotkey, f"Колесо «{w.name}» (зажать)") for w in cfg.wheels[:3]]
-        rows += [(g.stop_hotkey, "Остановить речь")]
+        rows = [(g.input_hotkey, tr("Окно ввода"))]
+        rows += [(w.hotkey, tr("Колесо «{name}» (зажать)", name=w.name)) for w in cfg.wheels[:3]]
+        rows += [(g.stop_hotkey, tr("Остановить речь"))]
         if g.next_voice_hotkey:
-            rows.append((g.next_voice_hotkey, "Следующий голос"))
+            rows.append((g.next_voice_hotkey, tr("Следующий голос")))
         bound = sum(1 for p in cfg.phrases if p.hotkey)
         r = 0
         for combo, name in rows:
@@ -407,7 +411,7 @@ class HomePage(QWidget):
             lbl.setObjectName("muted")
             self.cheat_grid.addWidget(lbl, r, 1)
             r += 1
-        more = QLabel(f"+ быстрых фраз на клавишах: {bound}")
+        more = QLabel(tr("+ быстрых фраз на клавишах: {n}", n=bound))
         more.setObjectName("hint")
         self.cheat_grid.addWidget(more, r, 0, 1, 2)
 
@@ -424,9 +428,9 @@ class HomePage(QWidget):
     def _check_cable(self) -> None:
         name = self.controller.detect_cable()
         if name:
-            self.controller.notify.emit(f"Найден {name} — готово! Выберите «CABLE Output» микрофоном в Discord.", "success")
+            self.controller.notify.emit(tr("Найден {name} — готово! Выберите «CABLE Output» микрофоном в Discord.", name=name), "success")
         else:
-            self.controller.notify.emit("Кабель пока не найден. После установки драйвера нужна перезагрузка ПК.", "warning")
+            self.controller.notify.emit(tr("Кабель пока не найден. После установки драйвера нужна перезагрузка ПК."), "warning")
         self.refresh()
 
     def _install_cable(self) -> None:
@@ -439,15 +443,15 @@ class HomePage(QWidget):
         answer = QMessageBox.question(
             self,
             "VB-Audio Virtual Cable",
-            "KMuted скачает официальный установщик с vb-audio.com и запустит его.\n"
+            tr("KMuted скачает официальный установщик с vb-audio.com и запустит его.\n"
             "Windows спросит разрешение (это драйвер). В установщике нажмите «Install Driver», "
-            "затем перезагрузите компьютер.\n\nПродолжить?",
+            "затем перезагрузите компьютер.\n\nПродолжить?"),
         )
         if answer != QMessageBox.Yes:
             return
         self._downloading = True
         self._cancel.clear()
-        self.install_btn.setText("Отменить загрузку")
+        self.install_btn.setText(tr("Отменить загрузку"))
         self.cable_progress.setValue(0)
         self.cable_progress.show()
         relay = _Relay(self)
@@ -471,16 +475,16 @@ class HomePage(QWidget):
 
     def _on_downloaded(self, setup, error) -> None:
         self._downloading = False
-        self.install_btn.setText("Скачать и установить VB-Cable")
+        self.install_btn.setText(tr("Скачать и установить VB-Cable"))
         self.install_btn.setIcon(icon("download", "white", 16))
         self.cable_progress.hide()
         if error is not None:
             if not isinstance(error, InterruptedError):
-                self.controller.notify.emit("Не удалось скачать — открываю сайт VB-Audio.", "warning")
+                self.controller.notify.emit(tr("Не удалось скачать — открываю сайт VB-Audio."), "warning")
                 QDesktopServices.openUrl(QUrl(cable.CABLE_PAGE))
             return
         if cable.run_installer(setup):
-            self.controller.notify.emit("Установщик запущен: «Install Driver», затем перезагрузка ПК.", "info")
+            self.controller.notify.emit(tr("Установщик запущен: «Install Driver», затем перезагрузка ПК."), "info")
         else:
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(setup.parent)))
 

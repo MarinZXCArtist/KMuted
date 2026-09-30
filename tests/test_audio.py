@@ -80,3 +80,31 @@ def test_passthrough_mixes_and_drops_backlog():
     m.enqueue(dsp.Clip(np.full(10, 0.5, dtype=np.float32), 1000))
     out = m.render(10)[:, 0]
     assert np.allclose(out, 0.6)
+
+
+def test_sounds_overlap_speech_and_can_be_stopped():
+    events = []
+    m = MixerCore(1000, 1, on_start=lambda: events.append("start"), on_idle=lambda: events.append("idle"))
+    m.enqueue(dsp.Clip(np.full(50, 0.1, dtype=np.float32), 1000))
+    m.play_sound(np.full(30, 0.2, dtype=np.float32), 1000, "boom")
+    m.play_sound(np.full(100, 8192, dtype=np.int16), 1000, "music")  # int16 source
+    out = m.render(20)[:, 0]
+    assert np.allclose(out, 0.1 + 0.2 + 0.25, atol=1e-3)
+    assert m.playing_tags() == {"boom", "music"}
+    m.stop_sounds("music")
+    assert m.playing_tags() == {"boom"}
+    m.render(40)  # boom ends at 30, speech at 50
+    assert events == ["start", "idle"] and not m.busy
+
+
+def test_sound_restart_and_mute_and_level():
+    m = MixerCore(1000, 1)
+    m.play_sound(np.full(100, 0.5, dtype=np.float32), 1000, "a")
+    m.render(50)
+    m.play_sound(np.full(100, 0.5, dtype=np.float32), 1000, "a")  # restart, not doubled
+    out = m.render(10)[:, 0]
+    assert np.allclose(out, 0.5)
+    assert abs(m.level - 0.5) < 1e-6
+    m.muted = True
+    assert np.allclose(m.render(10), 0.0)
+    assert m.level == 0.0

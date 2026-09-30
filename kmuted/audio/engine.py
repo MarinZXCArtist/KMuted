@@ -15,13 +15,13 @@ import logging
 import threading
 import time
 from collections import deque
-from dataclasses import dataclass
 from typing import Callable
 
 import numpy as np
 
 from kmuted.audio import devices
-from kmuted.audio.dsp import Clip, resample, silence, to_channels
+from kmuted.audio.dsp import Clip, resample
+from kmuted.i18n import tr
 
 log = logging.getLogger(__name__)
 
@@ -30,18 +30,67 @@ log = logging.getLogger(__name__)
 STREAM_LATENCY_S = 0.06
 
 
-@dataclass
-class _Item:
-    frames: np.ndarray  # (n, channels)
-    pos: int = 0
+class _Voice:
+    """One playing clip, resampled block by block (no full-length copies)."""
+
+    __slots__ = ("src", "scale", "ratio", "pos", "gain", "delay", "tag")
+
+    def __init__(self, samples: np.ndarray, src_rate: int, dst_rate: int, gain: float = 1.0,
+                 delay_frames: int = 0, tag: str = "") -> None:
+        samples = np.asarray(samples).reshape(-1)
+        if samples.dtype == np.int16:
+            self.scale = 1.0 / 32768.0
+        else:
+            samples = samples.astype(np.float32, copy=False)
+            self.scale = 1.0
+        self.src = samples
+        self.ratio = float(src_rate) / float(dst_rate)
+        self.pos = 0.0
+        self.gain = gain
+        self.delay = int(delay_frames)
+        self.tag = tag
+
+    @property
+    def done(self) -> bool:
+        return self.delay <= 0 and self.pos >= len(self.src)
+
+    def render_into(self, out: np.ndarray, offset: int = 0) -> int:
+        """Add up to ``len(out) - offset`` frames into mono ``out``; returns frames used."""
+        room = len(out) - offset
+        used = 0
+        if self.delay > 0:
+            skip = min(self.delay, room)
+            self.delay -= skip
+            used += skip
+            room -= skip
+        n_src = len(self.src)
+        if room <= 0 or self.pos >= n_src:
+            return used
+        count = min(room, int(np.ceil((n_src - self.pos) / self.ratio)))
+        idx = self.pos + np.arange(count, dtype=np.float64) * self.ratio
+        i0 = idx.astype(np.int64)
+        np.minimum(i0, n_src - 1, out=i0)
+        frac = (idx - i0).astype(np.float32)
+        i1 = np.minimum(i0 + 1, n_src - 1)
+        a = self.src[i0].astype(np.float32)
+        b = self.src[i1].astype(np.float32)
+        chunk = (a + (b - a) * frac) * (self.scale * self.gain)
+        start = offset + used
+        out[start : start + count] += chunk
+        self.pos += count * self.ratio
+        return used + count
 
 
 class MixerCore:
-    """Sequential clip queue + live passthrough, rendered in audio callbacks.
+    """Speech queue + overlapping sounds + live passthrough, mixed per block.
 
-    Pure numpy and thread-safe; the sounddevice callback just calls
+    * speech plays one clip after another (a queue);
+    * sounds (soundboard) play on top of speech and of each other;
+    * the real microphone can be mixed in (passthrough).
+
+    Pure numpy and thread-safe; the sounddevice callback calls
     :meth:`render`. ``on_start``/``on_idle`` fire (from the audio thread)
-    when the clip queue goes from empty to busy and back.
+    when content starts playing and when everything has finished.
     """
 
     PASSTHROUGH_MAX_S = 0.25
@@ -58,36 +107,73 @@ class MixerCore:
         self.channels = int(channels)
         self.gain = 1.0
         self.passthrough_gain = 1.0
+        self.muted = False  # content muted (passthrough still flows)
+        self.level = 0.0  # peak of the last rendered block (for meters)
         self._on_start = on_start
         self._on_idle = on_idle
         self._lock = threading.Lock()
-        self._queue: deque[_Item] = deque()
+        self._queue: deque[_Voice] = deque()
+        self._sounds: list[_Voice] = []
         self._busy = False
         self._pt: deque[np.ndarray] = deque()
         self._pt_len = 0
 
-    # --- clips -------------------------------------------------------------
+    # --- content -------------------------------------------------------------
 
-    def enqueue(self, clip: Clip, lead_ms: int = 0) -> None:
-        mono = resample(clip.samples, clip.sample_rate, self.sample_rate)
-        if lead_ms > 0:
-            mono = np.concatenate([silence(self.sample_rate, lead_ms), mono])
-        if len(mono) == 0:
+    def enqueue(self, clip: Clip, lead_ms: int = 0, gain: float = 1.0) -> None:
+        """Queue speech after whatever speech is already playing."""
+        if len(clip.samples) == 0:
             return
-        item = _Item(to_channels(mono, self.channels))
+        delay = int(self.sample_rate * lead_ms / 1000) if lead_ms > 0 else 0
+        self._add(_Voice(clip.samples, clip.sample_rate, self.sample_rate, gain, delay), queue=True)
+
+    def play_sound(self, samples: np.ndarray, sample_rate: int, tag: str, gain: float = 1.0,
+                   lead_ms: int = 0, restart: bool = True) -> None:
+        """Play a sound on top of everything else (soundboard)."""
+        if len(samples) == 0:
+            return
+        delay = int(self.sample_rate * lead_ms / 1000) if lead_ms > 0 else 0
+        voice = _Voice(samples, sample_rate, self.sample_rate, gain, delay, tag)
+        with self._lock:
+            if restart and tag:
+                self._sounds = [v for v in self._sounds if v.tag != tag]
+        self._add(voice, queue=False)
+
+    def _add(self, voice: _Voice, queue: bool) -> None:
         start = False
         with self._lock:
-            self._queue.append(item)
+            (self._queue.append if queue else self._sounds.append)(voice)
             if not self._busy:
                 self._busy = start = True
         if start and self._on_start:
             self._on_start()
 
+    def stop_sounds(self, tag: str | None = None) -> None:
+        with self._lock:
+            self._sounds = [] if tag is None else [v for v in self._sounds if v.tag != tag]
+        self._maybe_idle()
+
+    def clear_speech(self) -> None:
+        with self._lock:
+            self._queue.clear()
+        self._maybe_idle()
+
     def clear(self) -> None:
         with self._lock:
             self._queue.clear()
-            was_busy, self._busy = self._busy, False
-        if was_busy and self._on_idle:
+            self._sounds = []
+        self._maybe_idle()
+
+    def playing_tags(self) -> set[str]:
+        with self._lock:
+            return {v.tag for v in self._sounds}
+
+    def _maybe_idle(self) -> None:
+        with self._lock:
+            idle = self._busy and not self._queue and not self._sounds
+            if idle:
+                self._busy = False
+        if idle and self._on_idle:
             self._on_idle()
 
     @property
@@ -141,27 +227,34 @@ class MixerCore:
     # --- rendering ---------------------------------------------------------
 
     def render(self, frames: int) -> np.ndarray:
-        out = np.zeros((frames, self.channels), dtype=np.float32)
+        mono = np.zeros(frames, dtype=np.float32)
         went_idle = False
         with self._lock:
             filled = 0
             while filled < frames and self._queue:
-                item = self._queue[0]
-                take = min(frames - filled, len(item.frames) - item.pos)
-                out[filled : filled + take] = item.frames[item.pos : item.pos + take]
-                item.pos += take
-                filled += take
-                if item.pos >= len(item.frames):
+                voice = self._queue[0]
+                filled += voice.render_into(mono, filled)
+                if voice.done:
                     self._queue.popleft()
-            if self.gain != 1.0:
-                out *= self.gain
-            if self._busy and not self._queue:
+                else:
+                    break
+            for voice in self._sounds:
+                voice.render_into(mono)
+            if self._sounds:
+                self._sounds = [v for v in self._sounds if not v.done]
+            if self.muted:
+                mono[:] = 0.0
+            elif self.gain != 1.0:
+                mono *= self.gain
+            if self._busy and not self._queue and not self._sounds:
                 self._busy = False
                 went_idle = True
             live = self._take_passthrough(frames)
         if live is not None:
-            out += (live * self.passthrough_gain)[:, None]
-        np.clip(out, -1.0, 1.0, out=out)
+            mono += live * self.passthrough_gain
+        np.clip(mono, -1.0, 1.0, out=mono)
+        self.level = float(np.max(np.abs(mono))) if frames else 0.0
+        out = np.repeat(mono[:, None], self.channels, axis=1) if self.channels > 1 else mono[:, None]
         if went_idle and self._on_idle:
             self._on_idle()
         return out
@@ -192,7 +285,7 @@ class OutputSink:
                 errors.append(f"{dev.hostapi}: {exc}")
                 log.warning("cannot open %s on %s: %s", dev.name, dev.hostapi, exc)
         if self.stream is None:
-            raise devices.AudioUnavailable(f"Не удалось открыть «{label}»: " + "; ".join(errors or ["устройство не найдено"]))
+            raise devices.AudioUnavailable(tr("Не удалось открыть «{name}»: ", name=label) + "; ".join(errors or [tr("устройство не найдено")]))
         log.info("%s -> %s [%s, %d Hz]", label, self.device.name, self.device.hostapi, self.mixer.sample_rate)
 
     def _open(self, sd, dev: devices.DeviceInfo, on_start, on_idle) -> None:
@@ -238,29 +331,42 @@ class OutputSink:
             self.stream = None
 
 
-class PassthroughInput:
-    """Feeds the real microphone into the mic sink."""
+class InputTap:
+    """Reads a real microphone: feeds the mic sink (passthrough) and/or a level meter."""
 
-    def __init__(self, candidates: list[devices.DeviceInfo], mixer: MixerCore) -> None:
+    def __init__(
+        self,
+        candidates: list[devices.DeviceInfo],
+        mixer: MixerCore | None = None,
+        label: str = "passthrough",
+    ) -> None:
         sd = devices.get_sd()
         self.stream = None
+        self.level = 0.0
+        self.device: devices.DeviceInfo | None = None
         errors = []
         for dev in candidates:
-            for rate in (mixer.sample_rate, int(dev.default_samplerate)):
+            rates = [int(dev.default_samplerate)]
+            if mixer is not None:
+                rates.insert(0, mixer.sample_rate)
+            for rate in rates:
                 try:
                     self.stream = self._open(sd, dev, rate, mixer)
-                    log.info("passthrough <- %s [%s, %d Hz]", dev.name, dev.hostapi, rate)
+                    self.device = dev
+                    log.info("%s <- %s [%s, %d Hz]", label, dev.name, dev.hostapi, rate)
                     return
                 except Exception as exc:
                     errors.append(f"{dev.hostapi}@{rate}: {exc}")
-        raise devices.AudioUnavailable("Не удалось открыть микрофон: " + "; ".join(errors or ["устройство не найдено"]))
+        raise devices.AudioUnavailable(tr("Не удалось открыть микрофон: ") + "; ".join(errors or [tr("устройство не найдено")]))
 
-    @staticmethod
-    def _open(sd, dev: devices.DeviceInfo, rate: int, mixer: MixerCore):
-        target = mixer.sample_rate
+    def _open(self, sd, dev: devices.DeviceInfo, rate: int, mixer: MixerCore | None):
+        target = mixer.sample_rate if mixer is not None else rate
 
         def callback(indata, frames, _time, status):
             block = indata[:, 0]
+            self.level = float(np.max(np.abs(block))) if frames else 0.0
+            if mixer is None:
+                return
             if rate != target:
                 block = resample(block, rate, target)
             mixer.push_passthrough(block.copy())
@@ -293,6 +399,9 @@ class PassthroughInput:
             self.stream = None
 
 
+PassthroughInput = InputTap  # backwards-compatible name
+
+
 class AudioEngine:
     """Owns the sinks; the rest of the app just calls :meth:`play`."""
 
@@ -306,7 +415,8 @@ class AudioEngine:
         self._lock = threading.RLock()
         self.mic: OutputSink | None = None
         self.monitor: OutputSink | None = None
-        self.passthrough: PassthroughInput | None = None
+        self.passthrough: InputTap | None = None
+        self.meter: InputTap | None = None  # mic level meter while the Audio page is open
         self._settings = None
         self._keys: dict[str, tuple] = {}
         self._last_retry = 0.0
@@ -341,12 +451,12 @@ class AudioEngine:
             self.mic = None
         self.errors.pop("mic", None)
         if not s.mic_device:
-            self.errors["mic"] = "Виртуальный микрофон не выбран"
+            self.errors["mic"] = tr("Виртуальный микрофон не выбран")
             return
         try:
             self.mic = OutputSink(
                 devices.find_candidates(s.mic_device, "output"),
-                "виртуальный микрофон",
+                tr("виртуальный микрофон"),
                 on_start=self._mic_started,
                 on_idle=self._mic_idle,
             )
@@ -366,25 +476,22 @@ class AudioEngine:
             else:
                 candidates = devices.default_output_candidates()
             if self.mic and self.mic.device and any(c.name == self.mic.device.name for c in candidates[:1]):
-                self.errors["monitor"] = "Наушники совпадают с виртуальным микрофоном — прослушка отключена"
+                self.errors["monitor"] = tr("Наушники совпадают с виртуальным микрофоном — прослушка отключена")
                 return
-            self.monitor = OutputSink(candidates, "наушники")
+            self.monitor = OutputSink(candidates, tr("наушники"))
         except devices.AudioUnavailable as exc:
             self.errors["monitor"] = str(exc)
 
     def _open_passthrough(self, s) -> None:
         self._close_passthrough()
+        if s.passthrough_enabled and self.meter is not None:
+            self.meter.close()  # passthrough reports the level itself
+            self.meter = None
         self.errors.pop("passthrough", None)
         if not (s.passthrough_enabled and self.mic):
             return
         try:
-            if s.passthrough_device:
-                candidates = devices.find_candidates(s.passthrough_device, "input")
-            else:
-                sd = devices.get_sd()
-                name = sd.query_devices(kind="input")["name"]
-                candidates = devices.find_candidates(name, "input")
-            self.passthrough = PassthroughInput(candidates, self.mic.mixer)
+            self.passthrough = InputTap(self._input_candidates(s.passthrough_device), self.mic.mixer)
         except Exception as exc:
             self.errors["passthrough"] = str(exc)
 
@@ -395,9 +502,16 @@ class AudioEngine:
         if self.mic and self.mic.mixer:
             self.mic.mixer.clear_passthrough()
 
+    def _input_candidates(self, name: str) -> list[devices.DeviceInfo]:
+        if name:
+            return devices.find_candidates(name, "input")
+        sd = devices.get_sd()
+        return devices.find_candidates(sd.query_devices(kind="input")["name"], "input")
+
     def _apply_volumes(self, s) -> None:
         if self.mic and self.mic.mixer:
             self.mic.mixer.gain = s.mic_volume / 100.0
+            self.mic.mixer.muted = bool(getattr(s, "mic_muted", False))
             self.mic.mixer.passthrough_gain = s.passthrough_volume / 100.0
         if self.monitor and self.monitor.mixer:
             self.monitor.mixer.gain = s.monitor_volume / 100.0
@@ -436,6 +550,66 @@ class AudioEngine:
             if self._settings is not None:
                 self.configure(self._settings)
 
+    def play_sound(self, samples, sample_rate: int, tag: str, gain: float = 1.0, lead_ms: int = 0,
+                   monitor_only: bool = False, restart: bool = True) -> bool:
+        """Soundboard: plays on top of speech. Returns False if nothing to play into."""
+        with self._lock:
+            self._recover()
+            sent = False
+            if self.mic and not monitor_only:
+                self.mic.mixer.play_sound(samples, sample_rate, tag, gain, lead_ms, restart)
+                sent = True
+            if self.monitor:
+                self.monitor.mixer.play_sound(samples, sample_rate, tag, gain, lead_ms, restart)
+                sent = True
+            return sent
+
+    def stop_sounds(self, tag: str | None = None) -> None:
+        with self._lock:
+            for sink in (self.mic, self.monitor):
+                if sink and sink.mixer:
+                    sink.mixer.stop_sounds(tag)
+
+    def playing_sounds(self) -> set[str]:
+        sink = self.mic or self.monitor
+        return sink.mixer.playing_tags() if sink and sink.mixer else set()
+
+    def stop_speech(self) -> None:
+        with self._lock:
+            for sink in (self.mic, self.monitor):
+                if sink and sink.mixer:
+                    sink.mixer.clear_speech()
+
+    # --- meters ------------------------------------------------------------
+
+    @property
+    def output_level(self) -> float:
+        """Peak going into the virtual mic (what others hear)."""
+        return self.mic.mixer.level if self.mic and self.mic.mixer and self.mic.alive else 0.0
+
+    @property
+    def input_level(self) -> float:
+        """Peak of the real microphone (passthrough stream or the meter)."""
+        tap = self.passthrough or self.meter
+        return tap.level if tap is not None else 0.0
+
+    def start_meter(self) -> str:
+        """Open the real mic just for the level meter (if passthrough is off)."""
+        with self._lock:
+            if self.passthrough is not None or self.meter is not None or self._settings is None:
+                return ""
+            try:
+                self.meter = InputTap(self._input_candidates(self._settings.passthrough_device), None, "meter")
+            except Exception as exc:
+                return str(exc)
+            return ""
+
+    def stop_meter(self) -> None:
+        with self._lock:
+            if self.meter is not None:
+                self.meter.close()
+                self.meter = None
+
     def stop(self) -> None:
         with self._lock:
             for sink in (self.mic, self.monitor):
@@ -453,6 +627,9 @@ class AudioEngine:
     def close(self) -> None:
         with self._lock:
             self._close_passthrough()
+            if self.meter is not None:
+                self.meter.close()
+                self.meter = None
             for sink in (self.mic, self.monitor):
                 if sink:
                     sink.close()

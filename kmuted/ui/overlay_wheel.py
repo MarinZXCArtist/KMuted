@@ -264,8 +264,10 @@ class WheelOverlay(QWidget):
         self.setAttribute(Qt.WA_ShowWithoutActivating)
         self.setFocusPolicy(Qt.NoFocus)
         self.slots = []
+        self.captions: list[str] = []
         self.title = ""
         self.hint = ""
+        self.scale_percent = 100
         self.deadzone = 40.0
         self.vector = (0.0, 0.0)
         self.selected = -1
@@ -287,9 +289,10 @@ class WheelOverlay(QWidget):
         self._ease.setInterval(16)
         self._ease.timeout.connect(self._ease_step)
 
-    def open(self, title: str, slots, deadzone: float, hint: str = "") -> None:
+    def open(self, title: str, slots, deadzone: float, hint: str = "", captions: list[str] | None = None) -> None:
         self._outro.stop()
         self.slots = list(slots)
+        self.captions = list(captions) if captions is not None else [s.caption for s in self.slots]
         self.title = title
         self.hint = hint
         self.deadzone = deadzone
@@ -298,8 +301,8 @@ class WheelOverlay(QWidget):
         self._hl = [0.0] * len(self.slots)
         screen = QGuiApplication.screenAt(QCursor.pos()) or QGuiApplication.primaryScreen()
         geo = screen.geometry()
-        side = int(min(geo.width(), geo.height()) * 0.52)
-        side = max(380, min(side, 640))
+        side = int(min(geo.width(), geo.height()) * 0.52 * self.scale_percent / 100)
+        side = max(300, min(side, int(min(geo.width(), geo.height()) * 0.9)))
         self.setGeometry(geo.center().x() - side // 2, geo.center().y() - side // 2, side, side)
         self.setWindowOpacity(0.0)
         self._scale = 0.88
@@ -335,7 +338,7 @@ class WheelOverlay(QWidget):
         vx, vy = clamp_vector(self.vector[0] + dx, self.vector[1] + dy)
         self.vector = (vx, vy)
         idx = sector_for_vector(vx, vy, len(self.slots), self.deadzone)
-        if idx >= 0 and not self.slots[idx].caption:
+        if idx >= 0 and not (self.captions[idx] and self.slots[idx].filled):
             idx = -1  # empty slot = cancel
         if idx != self.selected:
             self.selected = idx
@@ -362,18 +365,18 @@ class WheelOverlay(QWidget):
     def selected_slot(self):
         if 0 <= self.selected < len(self.slots):
             slot = self.slots[self.selected]
-            return slot if slot.text.strip() else None
+            return slot if slot.filled else None
         return None
 
     def paintEvent(self, _event) -> None:  # noqa: N802
         p = QPainter(self)
         slot = self.selected_slot()
-        center = slot.text if slot else ""
+        center = (slot.text.strip() or self.captions[self.selected]) if slot else ""
         hint = f"{self.title} — {self.hint}" if self.hint else self.title
         paint_wheel(
             p,
             QRectF(self.rect()),
-            [s.caption for s in self.slots],
+            self.captions,
             self.selected,
             title=hint,
             center_text=center,

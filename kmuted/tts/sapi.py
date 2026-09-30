@@ -15,6 +15,7 @@ from xml.sax.saxutils import escape
 from kmuted.audio.dsp import Clip
 from kmuted.config import VoiceProfile
 from kmuted.tts.base import TTSEngine, TTSError, VoiceInfo
+from kmuted.i18n import tr
 
 log = logging.getLogger(__name__)
 
@@ -52,11 +53,11 @@ class SapiEngine(TTSEngine):
 
     def availability(self) -> str:
         if sys.platform != "win32":
-            return "Голоса Windows доступны только в Windows"
+            return tr("Голоса Windows доступны только в Windows")
         try:
             import win32com.client  # noqa: F401
         except ImportError:
-            return "Не установлен пакет pywin32"
+            return tr("Не установлен пакет pywin32")
         return ""
 
     def _tokens(self):
@@ -152,7 +153,7 @@ class SapiEngine(TTSEngine):
             self._speak_to_file(text, profile, wav_path)
             samples, rate = sf.read(wav_path, dtype="float32", always_2d=False)
         except Exception as exc:
-            raise TTSError(f"Голос Windows: {exc}") from exc
+            raise TTSError(tr("Голос Windows: {error}", error=exc)) from exc
         finally:
             pythoncom.CoUninitialize()
             try:

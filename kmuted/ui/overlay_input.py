@@ -10,12 +10,14 @@ from kmuted import winapi
 from kmuted.ui import theme
 from kmuted.ui.components import Keycaps
 from kmuted.ui.icons import render_logo
+from kmuted.i18n import tr
 
 MAX_CHARS = 500
 MARGIN = 26  # room for the painted shadow
 RADIUS = 18
 
-_QSS = f"""
+def _qss() -> str:
+    return f"""
 QLabel {{ background: transparent; }}
 QLabel#ovTitle {{ font-size: 11pt; font-weight: 700; color: {theme.TEXT}; }}
 QLabel#ovVoice {{
@@ -47,7 +49,7 @@ class InputOverlay(QWidget):
         super().__init__(None, Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.NoDropShadowWindowHint)
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setWindowTitle("KMuted")
-        self.setStyleSheet(_QSS)
+        self.setStyleSheet(_qss())
         self._history: list[str] = []
         self._history_pos = -1
         self._draft = ""
@@ -56,19 +58,20 @@ class InputOverlay(QWidget):
         self._restore_on_hide = True
         self.restore_focus = True
         self.keep_open = False
+        self.position = "center"  # top / center / bottom
         self._angle = 0.0
         self._flash = 0.0
         self._target = QPoint()
 
         logo = QLabel()
         logo.setPixmap(render_logo(24))
-        title = QLabel("Сказать в войс")
+        title = QLabel(tr("Сказать в войс"))
         title.setObjectName("ovTitle")
         self.voice_label = QLabel()
         self.voice_label.setObjectName("ovVoice")
-        self.voice_label.setToolTip("Tab — сменить голос")
+        self.voice_label.setToolTip(tr("Tab — сменить голос"))
         esc = Keycaps("esc")
-        esc.setToolTip("Закрыть")
+        esc.setToolTip(tr("Закрыть"))
         header = QHBoxLayout()
         header.setSpacing(10)
         header.addWidget(logo)
@@ -80,13 +83,13 @@ class InputOverlay(QWidget):
         self.edit = QLineEdit()
         self.edit.setObjectName("ovEdit")
         self.edit.setMaxLength(MAX_CHARS)
-        self.edit.setPlaceholderText("Напишите, что сказать…")
+        self.edit.setPlaceholderText(tr("Напишите, что сказать…"))
         self.edit.installEventFilter(self)
         self.edit.textChanged.connect(self._update_counter)
 
         self.hint = QLabel()
         self.hint.setObjectName("ovHint")
-        self.sent = QLabel("✓ Отправлено")
+        self.sent = QLabel(tr("✓ Отправлено"))
         self.sent.setObjectName("ovSent")
         self.sent.hide()
         self.counter = QLabel()
@@ -149,7 +152,14 @@ class InputOverlay(QWidget):
 
         screen = QGuiApplication.screenAt(QCursor.pos()) or QGuiApplication.primaryScreen()
         geo = screen.availableGeometry()
-        self._target = QPoint(geo.center().x() - self.width() // 2, geo.center().y() - self.height() // 2 - geo.height() // 10)
+        x = geo.center().x() - self.width() // 2
+        if self.position == "top":
+            y = geo.top() + geo.height() // 12
+        elif self.position == "bottom":
+            y = geo.bottom() - self.height() - geo.height() // 10
+        else:
+            y = geo.center().y() - self.height() // 2 - geo.height() // 10
+        self._target = QPoint(x, y)
         self.move(self._target + QPoint(0, 16))
         self.setWindowOpacity(0.0)
         self.show()
@@ -200,8 +210,8 @@ class InputOverlay(QWidget):
         self.edit.setFocus(Qt.ActiveWindowFocusReason)
 
     def _update_hint(self) -> None:
-        enter = "Enter — сказать" + ("" if self.keep_open else " и закрыть")
-        self.hint.setText(f"{enter}  ·  Shift+Enter — сказать и писать дальше  ·  ↑↓ история  ·  Tab — голос")
+        enter = tr("Enter — сказать") + ("" if self.keep_open else tr(" и закрыть"))
+        self.hint.setText(enter + tr("  ·  Shift+Enter — сказать и писать дальше  ·  ↑↓ история  ·  Tab — голос"))
 
     def _update_counter(self) -> None:
         n = len(self.edit.text())

@@ -19,6 +19,7 @@ from kmuted import paths
 from kmuted.audio.dsp import Clip
 from kmuted.config import VoiceProfile
 from kmuted.tts.base import TTSEngine, TTSError, VoiceInfo
+from kmuted.i18n import tr
 
 log = logging.getLogger(__name__)
 
@@ -43,7 +44,7 @@ def model_info(model: Path) -> VoiceInfo:
         pass
     extra = quality
     if speakers > 1:
-        extra = f"{quality}, голосов: {speakers}".strip(", ")
+        extra = f"{quality}, voices: {speakers}".strip(", ")
     return VoiceInfo(str(model), model.stem, lang.replace("_", "-"), "", extra)
 
 
@@ -60,7 +61,7 @@ class PiperEngine(TTSEngine):
         try:
             import piper  # noqa: F401
         except ImportError:
-            return "Не установлен пакет piper-tts (pip install piper-tts)"
+            return tr("Не установлен пакет piper-tts (pip install piper-tts)")
         return ""
 
     @staticmethod
@@ -82,17 +83,17 @@ class PiperEngine(TTSEngine):
             return voice
         path = Path(model_path)
         if not path.exists():
-            raise TTSError(f"Файл модели Piper не найден: {model_path}")
+            raise TTSError(tr("Файл модели Piper не найден: {path}", path=model_path))
         if not Path(f"{path}.json").exists():
-            raise TTSError(f"Рядом с моделью нет файла настроек {path.name}.json")
+            raise TTSError(tr("Рядом с моделью нет файла настроек {name}.json", name=path.name))
         try:
             from piper import PiperVoice
         except ImportError as exc:
-            raise TTSError("Не установлен пакет piper-tts") from exc
+            raise TTSError(tr("Не установлен пакет piper-tts")) from exc
         try:
             voice = PiperVoice.load(str(path))
         except Exception as exc:
-            raise TTSError(f"Не удалось загрузить модель Piper: {exc}") from exc
+            raise TTSError(tr("Не удалось загрузить модель Piper: {error}", error=exc)) from exc
         self._models[model_path] = voice
         while len(self._models) > MAX_LOADED_MODELS:
             self._models.popitem(last=False)
@@ -100,7 +101,7 @@ class PiperEngine(TTSEngine):
 
     def synthesize(self, text: str, profile: VoiceProfile) -> Clip:
         if not profile.voice:
-            raise TTSError("Для голоса Piper не выбрана модель")
+            raise TTSError(tr("Для голоса Piper не выбрана модель"))
         with self._lock:
             voice = self._load(profile.voice)
             num_speakers = getattr(voice.config, "num_speakers", 1) or 1
@@ -136,5 +137,5 @@ class PiperEngine(TTSEngine):
             raw = b"".join(voice.synthesize_stream_raw(text, speaker_id=speaker_id, length_scale=length_scale))
             parts.append(np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0)
         if not parts:
-            raise TTSError("Piper не смог произнести этот текст (язык модели не совпадает с текстом?)")
+            raise TTSError(tr("Piper не смог произнести этот текст (язык модели не совпадает с текстом?)"))
         return Clip(np.concatenate(parts), rate)

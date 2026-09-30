@@ -125,3 +125,44 @@ def test_conflicts_and_cycle_voice(controller):
     first = controller.config.active_voice()
     nxt = controller.cycle_voice(+1)
     assert nxt is not first and controller.config.active_voice() is nxt
+
+
+def test_repeat_last_and_variables(controller, qapp):
+    said = []
+    controller._enqueue = lambda text, voice_id, profile, persist, monitor_only: said.append((text, persist))
+    controller.repeat_last()  # nothing yet: just a notice
+    controller.say("Сейчас {время}", persist=True)
+    assert said[0][0].startswith("Сейчас ") and "{" not in said[0][0]
+    assert said[0][1] is False  # texts with variables are never cached
+    controller.repeat_last()
+    assert len(said) == 2 and said[1][0].startswith("Сейчас ")
+
+
+def test_hotkeys_for_sounds_voices_and_actions(controller, qapp):
+    from kmuted.config import Sound
+
+    played, toggled = [], []
+    controller.play_sound = lambda sid, monitor_only=False: played.append(sid)
+    controller.toggle_mute = lambda: toggled.append("mute")
+    snd = Sound(name="Horn", file="horn.wav", hotkey="alt+f1")
+    controller.config.sounds.append(snd)
+    voice = controller.config.voices[1]
+    voice.hotkey = "alt+f2"
+    controller.config.general.mute_hotkey = "alt+m"
+    controller.rebind_hotkeys()
+    controller._on_hotkey_down("alt+f1")
+    controller._on_hotkey_down("alt+f2")
+    controller._on_hotkey_down("alt+m")
+    assert played == [snd.id]
+    assert controller.config.active_voice() is voice
+    assert toggled == ["mute"]
+    owners = controller.hotkey_owners()
+    assert any("Horn" in name for _k, name in owners["alt+f1"])
+
+
+def test_volume_action_clamps(controller, qapp):
+    controller.config.audio.mic_volume = 195
+    controller.run_action("volume_up")
+    assert controller.config.audio.mic_volume == 200
+    controller.run_action("volume_down")
+    assert controller.config.audio.mic_volume == 190

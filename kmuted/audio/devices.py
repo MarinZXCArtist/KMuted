@@ -6,6 +6,8 @@ import logging
 import sys
 from dataclasses import dataclass
 
+from kmuted.i18n import tr
+
 log = logging.getLogger(__name__)
 
 # Output side of popular virtual audio cables. The *input* of the cable is
@@ -32,7 +34,7 @@ def get_sd():
     try:
         import sounddevice as sd
     except Exception as exc:  # PortAudio missing, etc.
-        raise AudioUnavailable(f"Звуковая библиотека недоступна: {exc}") from exc
+        raise AudioUnavailable(tr("Звуковая библиотека недоступна: {error}", error=exc)) from exc
     return sd
 
 

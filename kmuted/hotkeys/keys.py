@@ -211,7 +211,9 @@ def normalize_combo(combo: str) -> str:
 
 def key_display(name: str) -> str:
     if name in _DISPLAY:
-        return _DISPLAY[name]
+        from kmuted.i18n import tr
+
+        return tr(_DISPLAY[name])
     if name.startswith("num") and name[3:].isdigit():
         return f"Num {name[3:]}"
     return name.upper() if len(name) <= 3 else name.capitalize()

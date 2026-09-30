@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
 
 from kmuted.hotkeys.keys import MODIFIERS, VK_NAMES, format_combo, make_combo
 from kmuted.ui.components import combo_parts, icon_button, page_header, paint_keycaps  # noqa: F401
+from kmuted.i18n import tr
 
 # --- background work ---------------------------------------------------------
 
@@ -215,11 +216,11 @@ class HotkeyEdit(QWidget):
         self.button.setObjectName("hotkey")
         self.button.setCursor(Qt.PointingHandCursor)
         self.button.setMinimumWidth(170)
-        self.button.setToolTip("Нажмите и затем нужную клавишу или сочетание (можно боковые кнопки мыши)")
+        self.button.setToolTip(tr("Нажмите и затем нужную клавишу или сочетание (можно боковые кнопки мыши)"))
         self.button.clicked.connect(self.start_capture)
         self.button.installEventFilter(self)
 
-        self.clear_btn = icon_button("x", "Убрать горячую клавишу", size=14)
+        self.clear_btn = icon_button("x", tr("Убрать горячую клавишу"), size=14)
         self.clear_btn.clicked.connect(lambda: self.set_combo("", emit=True))
 
         lay = QHBoxLayout(self)
@@ -246,10 +247,10 @@ class HotkeyEdit(QWidget):
         if self._capturing:
             prefix = format_combo(self._pending_mod) + " + …" if self._pending_mod else ""
             self.button.parts = []
-            self.button.setText(prefix or "Нажмите клавишу…  (Esc — отмена)")
+            self.button.setText(prefix or tr("Нажмите клавишу…  (Esc — отмена)"))
         else:
             self.button.parts = combo_parts(self._combo)
-            self.button.setText("" if self.button.parts else "Не назначено")
+            self.button.setText("" if self.button.parts else tr("Не назначено"))
         self.button.update()
         self.clear_btn.setVisible(bool(self._combo))
 
@@ -394,7 +395,7 @@ def fill_voice_combo(combo: QComboBox, voices, current_id: str, include_default:
     combo.blockSignals(True)
     combo.clear()
     if include_default:
-        combo.addItem("Голос по умолчанию", "")
+        combo.addItem(tr("Голос по умолчанию"), "")
     for v in voices:
         combo.addItem(v.name, v.id)
     idx = combo.findData(current_id)
