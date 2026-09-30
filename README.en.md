@@ -38,13 +38,20 @@ still want to take part in voice chat.
 
 ## Quick start
 
-1. Download and run the installer `KMuted-Setup-<version>.exe` from
-   [Releases](https://github.com/MarinZXCArtist/KMuted/releases) (or run it from source — see
-   [Installation](#installation)). Pick **English** in the installer.
-2. On the **Home** page click **Download and install VB-Cable** (a virtual microphone, needed once)
-   and restart your PC.
-3. In Discord or in your game, choose **CABLE Output** as the microphone.
-4. Press `Alt + T`, type "Hello everyone!" and press `Enter` — your friends hear a voice.
+1. **[⬇ Download KMuted (ZIP)](https://github.com/MarinZXCArtist/KMuted/archive/HEAD.zip)** — or the green **Code → Download ZIP** button on the
+   repository page.
+2. Unzip it (right-click → "Extract All…") and open the folder.
+3. Double-click **`run.bat`**. The first start installs Python (if you don't have it) and everything
+   else by itself — 2–5 minutes, internet needed. After that `run.bat` starts KMuted in seconds.
+4. On KMuted's **Home** page click **Download and install VB-Cable** (a virtual microphone, needed
+   once) and restart your PC.
+5. In Discord or in your game, choose **CABLE Output** as the microphone.
+6. Press `Alt + T`, type "Hello everyone!" and press `Enter` — your friends hear a voice.
+
+The interface language follows your Windows language; change it in Settings → **Interface language**.
+
+> Windows may say "Windows protected your PC" — click **More info → Run anyway**. That happens with
+> any file from the internet that has no paid code signature.
 
 Next: put your own phrases on hotkeys (**Phrases** page), set up the wheel (`Alt + Q`), turn on
 translation (**Translate** page) and create a profile for your game (**Game profiles**).
@@ -58,6 +65,7 @@ translation (**Translate** page) and create a profile for your game (**Game prof
 - Phrase, wheel and sound editors got a **Works in** field (everywhere, or only in chosen games).
 - New artwork: the Home banner and the wheel center (drawn by code).
 - Tray menu: "Translate before speaking" toggle; the sidebar shows the active profile and language.
+- `run.bat` installs Python (via `winget`) and the libraries by itself — just download the ZIP and run it.
 
 **0.3.0** — soundboard (mp3/wav on hotkeys), cloud voices (ElevenLabs, OpenAI, Azure, Google,
 Yandex), English interface, installer and auto-updates, a Hotkeys page to bind everything,
@@ -133,21 +141,33 @@ The easiest way is the **Download and install VB-Cable** button on KMuted's Home
 
 ### 2. KMuted
 
-**Option A — installer.** On the [Releases](https://github.com/MarinZXCArtist/KMuted/releases) page
-download `KMuted-Setup-<version>.exe` and run it. No admin rights needed. The installer asks for
-the language (it becomes the app language), a desktop icon and start with Windows. After that
-KMuted offers updates by itself (Settings → Updates).
+**Option A — ZIP and `run.bat` (works right now).**
 
-Until the first release, the installer and a portable build are in the
-[Actions](https://github.com/MarinZXCArtist/KMuted/actions) tab → latest *Windows build* run →
-artifacts **KMuted-Setup** and **KMuted-portable**.
+1. [Download the ZIP](https://github.com/MarinZXCArtist/KMuted/archive/HEAD.zip) (or **Code → Download ZIP** on the repository page) and unzip it
+   anywhere, e.g. `Documents\KMuted`. Don't run it from inside the archive.
+2. Double-click **`run.bat`**. On the first start it:
+   - finds Python 3.10–3.13, or installs Python 3.12 by itself with `winget` (built into
+     Windows 10/11) if there is none;
+   - creates a `.venv` folder next to itself and installs the libraries there (2–5 minutes,
+     internet needed).
+3. From then on just run `run.bat` — you can put a shortcut on the desktop
+   (right-click → "Send to" → "Desktop (create shortcut)").
 
-**Option B — from source.** Install [Python 3.10–3.12](https://www.python.org/downloads/)
-(tick *Add python.exe to PATH*), download this repository and run `run.bat`. On first start it
-installs the dependencies itself.
+No `winget` (old Windows 10)? Install [Python 3.12](https://www.python.org/downloads/windows/)
+yourself with *Add python.exe to PATH* ticked and run `run.bat` again.
 
-Build it yourself: `build.bat` → `dist\KMuted\KMuted.exe`; `build_installer.bat` → installer
-`dist\KMuted-Setup-<version>.exe` (needs the free [Inno Setup 6](https://jrsoftware.org/isdl.php)).
+**Updating:** download the ZIP again, unzip it into a new folder and run `run.bat`. Your settings,
+phrases and sounds are stored separately (`%APPDATA%\KMuted`) and stay where they are.
+
+**Option B — installer.** Once `KMuted-Setup-<version>.exe` appears on the
+[Releases](https://github.com/MarinZXCArtist/KMuted/releases) page you can install with it: no
+Python, with shortcuts, start with Windows and one-click updates (Settings → Updates). The installer
+is built automatically when a version tag (`v0.4.0`) is pushed — provided GitHub Actions run for
+the account.
+
+**Option C — build it yourself.** `build.bat` → `dist\KMuted\KMuted.exe` (a program folder that no
+longer needs Python); `build_installer.bat` → installer `dist\KMuted-Setup-<version>.exe` (installs
+[Inno Setup 6](https://jrsoftware.org/isdl.php) with `winget` if it's missing).
 
 ### 3. Setup
 

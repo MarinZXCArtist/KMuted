@@ -1,17 +1,29 @@
 @echo off
+chcp 65001 >nul
 rem Build dist\KMuted\KMuted.exe with PyInstaller.
+setlocal
 cd /d "%~dp0"
-if not exist ".venv\Scripts\python.exe" (
-  py -3.12 -m venv .venv 2>nul || python -m venv .venv
-)
-".venv\Scripts\python.exe" -m pip install --upgrade pip
-".venv\Scripts\python.exe" -m pip install -r requirements.txt -r requirements-dev.txt || goto :fail
-".venv\Scripts\python.exe" tools\build_exe.py || goto :fail
+if exist ".venv\Scripts\python.exe" goto deps
+call tools\find_python.bat
+if not defined PY goto no_python
+%PY% -m venv .venv
+if errorlevel 1 goto fail
+
+:deps
+".venv\Scripts\python.exe" -m pip install --disable-pip-version-check -q --upgrade pip
+".venv\Scripts\python.exe" -m pip install --disable-pip-version-check -r requirements.txt -r requirements-dev.txt || goto fail
+".venv\Scripts\python.exe" tools\build_exe.py || goto fail
 echo.
-echo Done: dist\KMuted\KMuted.exe
+echo Готово / Done: dist\KMuted\KMuted.exe
 pause
 exit /b 0
+
+:no_python
+echo Python 3.10-3.13 не найден / not found: https://www.python.org/downloads/windows/
+pause
+exit /b 1
+
 :fail
-echo Build failed.
+echo Сборка не удалась / Build failed.
 pause
 exit /b 1
