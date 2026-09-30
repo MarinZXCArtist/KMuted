@@ -60,7 +60,7 @@ def main() -> int:
     subprocess.run(args, check=True, cwd=ROOT)
 
     app_dir = DIST / "KMuted"
-    for extra in ("README.md", "start_rvc_server.bat"):
+    for extra in ("README.md", "README.en.md", "start_rvc_server.bat"):
         if (ROOT / extra).exists():
             shutil.copy2(ROOT / extra, app_dir / extra)
     archive = shutil.make_archive(str(DIST / f"KMuted-{__version__}-windows"), "zip", DIST, "KMuted")
