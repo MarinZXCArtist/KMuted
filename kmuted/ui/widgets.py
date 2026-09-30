@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import sys
 import threading
+import weakref
 from typing import Any, Callable
 
-from PySide6.QtCore import QObject, Qt, Signal, Slot
+from PySide6.QtCore import QObject, QRectF, Qt, Signal, Slot
+from PySide6.QtGui import QFont, QPainter
 from PySide6.QtWidgets import (
     QComboBox,
     QFrame,
@@ -14,12 +16,12 @@ from PySide6.QtWidgets import (
     QLabel,
     QPushButton,
     QSlider,
-    QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
 from kmuted.hotkeys.keys import MODIFIERS, VK_NAMES, format_combo, make_combo
+from kmuted.ui.components import combo_parts, icon_button, page_header, paint_keycaps  # noqa: F401
 
 # --- background work ---------------------------------------------------------
 
@@ -159,6 +161,27 @@ def modifiers_from_qt(mods) -> set[str]:
     return out
 
 
+class _KeycapButton(QPushButton):
+    """Button that shows its combo as keyboard keycaps."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.parts: list[str] = []
+        f = QFont(self.font())
+        f.setPointSizeF(8.8)
+        f.setWeight(QFont.DemiBold)
+        self._cap_font = f
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        super().paintEvent(event)
+        if not self.parts or self.text():
+            return
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        paint_keycaps(p, QRectF(self.rect()).adjusted(8, 3, -8, -4), self.parts, self._cap_font)
+        p.end()
+
+
 class HotkeyEdit(QWidget):
     """Click, then press a key combo (or a mouse side button) to bind it.
 
@@ -167,25 +190,36 @@ class HotkeyEdit(QWidget):
     """
 
     changed = Signal(str)
-    capturing_count = 0  # > 0 while any editor listens; global hotkeys pause
+    _instances: "weakref.WeakSet[HotkeyEdit]" = weakref.WeakSet()
+
+    @classmethod
+    def any_capturing(cls) -> bool:
+        """True while some editor listens (global hotkeys pause meanwhile)."""
+        alive = []
+        for edit in list(cls._instances):
+            try:
+                alive.append(edit._capturing and edit.isVisible())
+            except RuntimeError:  # widget already deleted
+                continue
+        return any(alive)
 
     def __init__(self, combo: str = "", single_key: bool = False, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        HotkeyEdit._instances.add(self)
         self._combo = combo
         self._single = single_key
         self._capturing = False
         self._pending_mod: str | None = None
 
-        self.button = QPushButton()
+        self.button = _KeycapButton()
         self.button.setObjectName("hotkey")
         self.button.setCursor(Qt.PointingHandCursor)
         self.button.setMinimumWidth(170)
+        self.button.setToolTip("Нажмите и затем нужную клавишу или сочетание (можно боковые кнопки мыши)")
         self.button.clicked.connect(self.start_capture)
         self.button.installEventFilter(self)
 
-        self.clear_btn = QToolButton()
-        self.clear_btn.setText("✕")
-        self.clear_btn.setToolTip("Убрать горячую клавишу")
+        self.clear_btn = icon_button("x", "Убрать горячую клавишу", size=14)
         self.clear_btn.clicked.connect(lambda: self.set_combo("", emit=True))
 
         lay = QHBoxLayout(self)
@@ -211,10 +245,13 @@ class HotkeyEdit(QWidget):
         self.button.style().polish(self.button)
         if self._capturing:
             prefix = format_combo(self._pending_mod) + " + …" if self._pending_mod else ""
-            self.button.setText(prefix or "Нажмите клавишу… (Esc — отмена)")
+            self.button.parts = []
+            self.button.setText(prefix or "Нажмите клавишу…  (Esc — отмена)")
         else:
-            self.button.setText(format_combo(self._combo) or "— не назначено —")
-        self.clear_btn.setEnabled(bool(self._combo))
+            self.button.parts = combo_parts(self._combo)
+            self.button.setText("" if self.button.parts else "Не назначено")
+        self.button.update()
+        self.clear_btn.setVisible(bool(self._combo))
 
     # --- capture -----------------------------------------------------------
 
@@ -222,7 +259,6 @@ class HotkeyEdit(QWidget):
         if self._capturing:
             return
         self._capturing = True
-        HotkeyEdit.capturing_count += 1
         self._pending_mod = None
         self.button.setFocus()
         self.button.grabKeyboard()
@@ -233,7 +269,6 @@ class HotkeyEdit(QWidget):
         if not self._capturing:
             return
         self._capturing = False
-        HotkeyEdit.capturing_count = max(0, HotkeyEdit.capturing_count - 1)
         self._pending_mod = None
         self.button.releaseKeyboard()
         self.button.releaseMouse()
@@ -352,22 +387,6 @@ class InfoBox(QFrame):
 
     def set_html(self, html: str) -> None:
         self.label.setText(html)
-
-
-def page_header(title: str, subtitle: str = "") -> QWidget:
-    box = QWidget()
-    lay = QVBoxLayout(box)
-    lay.setContentsMargins(0, 0, 0, 6)
-    lay.setSpacing(2)
-    h = QLabel(title)
-    h.setObjectName("h1")
-    lay.addWidget(h)
-    if subtitle:
-        s = QLabel(subtitle)
-        s.setObjectName("muted")
-        s.setWordWrap(True)
-        lay.addWidget(s)
-    return box
 
 
 def fill_voice_combo(combo: QComboBox, voices, current_id: str, include_default: bool = True) -> None:

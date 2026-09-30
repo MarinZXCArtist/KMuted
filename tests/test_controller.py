@@ -89,7 +89,7 @@ def test_wheel_hold_flow(controller, qapp):
     assert controller.wheel_overlay.isVisible()
     controller.wheel_overlay.add_delta(120, 0)  # right -> slot 2
     controller._on_hotkey_up(wheel.hotkey)
-    assert not controller.wheel_overlay.isVisible()
+    assert controller._wheel is None
     assert said == [wheel.slots[2].text]
 
     controller._on_hotkey_down(wheel.hotkey)
@@ -114,7 +114,7 @@ def test_wheel_toggle_flow(controller, qapp):
 
     controller._on_hotkey_down(wheel.hotkey)
     controller._on_hotkey_down("esc")
-    assert not controller.wheel_overlay.isVisible()
+    assert controller._wheel is None
     assert len(said) == 1
 
 

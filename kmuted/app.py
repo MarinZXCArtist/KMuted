@@ -5,15 +5,16 @@ from __future__ import annotations
 import argparse
 import logging
 import logging.handlers
+import os
 import sys
 import traceback
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QAction
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
-from PySide6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon
+from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
-from kmuted import APP_NAME, __version__, paths
+from kmuted import APP_NAME, __version__, paths, winapi
 from kmuted.audio import devices
 from kmuted.config import load_config, save_config
 
@@ -69,9 +70,9 @@ def _listen_for_instances(on_show) -> QLocalServer:
 def build_tray(app: QApplication, window, controller) -> QSystemTrayIcon | None:
     if not QSystemTrayIcon.isSystemTrayAvailable():
         return None
-    from kmuted.ui.icons import app_icon
+    from kmuted.ui.icons import tray_icon
 
-    tray = QSystemTrayIcon(app_icon(), app)
+    tray = QSystemTrayIcon(tray_icon(), app)
     tray.setToolTip(f"{APP_NAME} — озвучка в микрофон")
     menu = QMenu()
     show = QAction("Открыть KMuted", menu)
@@ -102,7 +103,8 @@ def build_tray(app: QApplication, window, controller) -> QSystemTrayIcon | None:
         if reason in (QSystemTrayIcon.Trigger, QSystemTrayIcon.DoubleClick)
         else None
     )
-    controller.speaking_changed.connect(lambda on: tray.setIcon(app_icon(speaking=on)))
+    idle_icon, busy_icon = tray_icon(False), tray_icon(True)
+    controller.speaking_changed.connect(lambda on: tray.setIcon(busy_icon if on else idle_icon))
     tray.show()
     tray._menu = menu  # keep a reference
     return tray
@@ -158,21 +160,16 @@ def main(argv: list[str] | None = None) -> int:
         app.setQuitOnLastWindowClosed(True)
     if not ((args.minimized or config.general.start_minimized) and window.tray):
         window.show()
+    else:
+        QTimer.singleShot(3000, winapi.trim_memory)
 
     if not args.no_audio and not config.audio.mic_device:
-        window.show_and_raise()
-        window.nav.setCurrentRow(3)  # "Звук"
-        QMessageBox.information(
-            window,
-            APP_NAME,
-            "Виртуальный микрофон не найден.\n\n"
-            "1. Установите бесплатный VB-Audio Virtual Cable (vb-audio.com/Cable) и перезагрузите ПК.\n"
-            "2. На вкладке «Звук» выберите «CABLE Input».\n"
-            "3. В Discord или игре выберите микрофон «CABLE Output».\n\n"
-            "Пока кабель не выбран, озвучка звучит только в ваших наушниках.",
-        )
+        window.show_and_raise()  # the home page shows the setup checklist
 
     app.aboutToQuit.connect(controller.shutdown)
     code = app.exec()
     log.info("bye")
-    return code
+    logging.shutdown()
+    # Settings are saved by now. Don't wait for a speech request that may
+    # still be talking to a server (up to tens of seconds): exit right away.
+    os._exit(code)

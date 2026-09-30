@@ -8,12 +8,13 @@ def test_main_window_builds_all_pages(qapp):
     controller = Controller(cfgmod.default_config(), enable_hotkeys=False, enable_audio=False)
     window = MainWindow(controller)
     window.show()
-    for i in range(window.nav.count()):
-        window.nav.setCurrentRow(i)
+    for i in range(len(window.nav.buttons)):
+        window.nav.set_current(i)
         qapp.processEvents()
+        assert window.stack.currentIndex() == i
         assert not window.grab().isNull()
     # editing through the wheels page updates config and rebinds
-    wheels_page = window.pages[1]
+    wheels_page = window.page(2)
     wheels_page.add_wheel()
     assert len(controller.config.wheels) == 2
     wheels_page.remove_wheel()
@@ -32,12 +33,13 @@ def test_hotkey_edit_records_combo(qapp):
     edit = HotkeyEdit()
     got = []
     edit.changed.connect(got.append)
+    edit.show()
     edit.start_capture()
-    assert HotkeyEdit.capturing_count == 1
+    assert HotkeyEdit.any_capturing()
     edit.eventFilter(edit.button, QKeyEvent(QEvent.KeyPress, Qt.Key_Control, Qt.ControlModifier))
     edit.eventFilter(edit.button, QKeyEvent(QEvent.KeyPress, Qt.Key_F5, Qt.ControlModifier))
     assert got == ["ctrl+f5"]
-    assert HotkeyEdit.capturing_count == 0
+    assert not HotkeyEdit.any_capturing()
 
     single = HotkeyEdit(single_key=True)
     single.changed.connect(got.append)

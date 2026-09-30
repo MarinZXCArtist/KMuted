@@ -45,9 +45,12 @@ class PushToTalk:
         return self._down
 
     def set_key(self, combo: str) -> None:
-        self.release()
         parsed = parse_combo(combo or "")
-        self._key_name = parsed[1] if parsed else ""
+        name = parsed[1] if parsed else ""
+        if name == self._key_name and (self._target is not None or not name):
+            return  # unchanged: keep holding it if we are mid-sentence
+        self.release()
+        self._key_name = name
         self._target = None
         if not self._key_name:
             return

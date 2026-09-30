@@ -1,29 +1,26 @@
-"""Main window: sidebar navigation, pages, quick-say bar, status bar."""
+"""Main window: sidebar, animated page switching, composer bar, toasts."""
 
 from __future__ import annotations
 
-from PySide6.QtCore import QSize, QTimer
+from PySide6.QtCore import QSize, Qt, QTimer
 from PySide6.QtWidgets import (
+    QApplication,
     QComboBox,
     QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
-    QListWidget,
-    QListWidgetItem,
     QMainWindow,
-    QPushButton,
-    QStackedWidget,
-    QStatusBar,
     QVBoxLayout,
     QWidget,
 )
 
-from kmuted import __version__
-from kmuted.hotkeys.keys import format_combo
+from kmuted import __version__, winapi
 from kmuted.ui import theme
-from kmuted.ui.icons import app_icon, render_logo
+from kmuted.ui.components import Equalizer, FadeStack, NavBar, StatusDot, ToastHost, make_button
+from kmuted.ui.icons import app_icon, icon, render_logo
 from kmuted.ui.page_audio import AudioPage
+from kmuted.ui.page_home import HomePage
 from kmuted.ui.page_phrases import PhrasesPage
 from kmuted.ui.page_settings import SettingsPage
 from kmuted.ui.page_voices import VoicesPage
@@ -31,12 +28,14 @@ from kmuted.ui.page_wheels import WheelsPage
 from kmuted.ui.widgets import fill_voice_combo
 
 PAGES = [
-    ("💬", "Фразы"),
-    ("🎡", "Колёса"),
-    ("🗣", "Голоса"),
-    ("🎧", "Звук"),
-    ("⚙", "Настройки"),
+    ("home", "Главная"),
+    ("phrases", "Фразы"),
+    ("wheel", "Колёса"),
+    ("voices", "Голоса"),
+    ("audio", "Звук"),
+    ("settings", "Настройки"),
 ]
+AUDIO_PAGE = 4
 
 
 class MainWindow(QMainWindow):
@@ -44,95 +43,35 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.controller = controller
         self.quitting = False
-        self._tray_hint_shown = False
+        self.tray = None
         self.setWindowTitle("KMuted")
         self.setWindowIcon(app_icon())
-        self.resize(1240, 800)
-        self.setMinimumSize(QSize(900, 600))
+        self.resize(1260, 820)
+        self.setMinimumSize(QSize(980, 640))
 
-        # sidebar
-        brand = QWidget()
-        bl = QHBoxLayout(brand)
-        bl.setContentsMargins(16, 16, 16, 8)
-        logo = QLabel()
-        logo.setPixmap(render_logo(36))
-        name = QLabel(f"<b style='font-size:15pt'>KMuted</b><br><span style='color:{theme.MUTED}'>v{__version__}</span>")
-        bl.addWidget(logo)
-        bl.addWidget(name, 1)
+        self.toasts = ToastHost(self)
+        sidebar = self._build_sidebar()
 
-        self.nav = QListWidget()
-        self.nav.setObjectName("nav")
-        for icon, title in PAGES:
-            self.nav.addItem(QListWidgetItem(f"{icon}   {title}"))
-        self.nav.setFixedWidth(210)
-
-        self.hotkey_hint = QLabel()
-        self.hotkey_hint.setObjectName("hint")
-        self.hotkey_hint.setWordWrap(True)
-        self.hotkey_hint.setContentsMargins(16, 8, 16, 16)
-
-        sidebar = QFrame()
-        sidebar.setObjectName("sidebar")
-        sidebar.setFixedWidth(210)
-        sidebar.setStyleSheet(
-            f"QFrame#sidebar {{ background: {theme.SURFACE}; border-right: 1px solid {theme.BORDER}; }}"
-            f"QFrame#sidebar QWidget {{ background: {theme.SURFACE}; }}"
-        )
-        sl = QVBoxLayout(sidebar)
-        sl.setContentsMargins(0, 0, 0, 0)
-        sl.setSpacing(0)
-        sl.addWidget(brand)
-        sl.addWidget(self.nav, 1)
-        sl.addWidget(self.hotkey_hint)
-
-        # pages
-        self.stack = QStackedWidget()
-        self.pages = [
-            PhrasesPage(controller),
-            WheelsPage(controller),
-            VoicesPage(controller),
-            AudioPage(controller),
-            SettingsPage(controller),
-        ]
-        for page in self.pages:
-            self.stack.addWidget(page)
-        self.nav.currentRowChanged.connect(self.stack.setCurrentIndex)
-        self.nav.setCurrentRow(0)
-
-        # quick say bar
-        self.voice_combo = QComboBox()
-        self.voice_combo.setMinimumWidth(180)
-        self.voice_combo.setToolTip("Основной голос")
-        self.voice_combo.currentIndexChanged.connect(self._voice_picked)
-        self.quick = QLineEdit()
-        self.quick.setPlaceholderText("Напишите и нажмите Enter — прозвучит в микрофоне")
-        self.quick.returnPressed.connect(self._quick_say)
-        say = QPushButton("Сказать")
-        say.setObjectName("primary")
-        say.clicked.connect(self._quick_say)
-        stop = QPushButton("■ Стоп")
-        stop.clicked.connect(controller.stop)
-        bar = QFrame()
-        bar.setObjectName("card")
-        barl = QHBoxLayout(bar)
-        barl.setContentsMargins(10, 8, 10, 8)
-        barl.addWidget(self.voice_combo)
-        barl.addWidget(self.quick, 1)
-        barl.addWidget(say)
-        barl.addWidget(stop)
-        bar_holder = QWidget()
-        bhl = QVBoxLayout(bar_holder)
-        bhl.setContentsMargins(24, 4, 24, 12)
-        bhl.addWidget(bar)
+        # Pages are built the first time they are opened: faster start, less RAM.
+        self.stack = FadeStack()
+        self._factories = [HomePage, PhrasesPage, WheelsPage, VoicesPage, AudioPage, SettingsPage]
+        self._pages: list[QWidget | None] = [None] * len(self._factories)
+        for _ in self._factories:
+            self.stack.addWidget(QWidget())  # placeholders
+        self.nav.currentChanged.connect(self._open_page)
+        self.nav.set_current(0, animate=False)
+        self._open_page(0)
 
         right = QWidget()
         rl = QVBoxLayout(right)
         rl.setContentsMargins(0, 0, 0, 0)
         rl.setSpacing(0)
         rl.addWidget(self.stack, 1)
-        rl.addWidget(bar_holder)
+        rl.addWidget(self._build_composer())
 
         central = QWidget()
+        central.setObjectName("central")
+        central.setStyleSheet(f"QWidget#central {{ background: {theme.BG}; }}")
         cl = QHBoxLayout(central)
         cl.setContentsMargins(0, 0, 0, 0)
         cl.setSpacing(0)
@@ -140,51 +79,181 @@ class MainWindow(QMainWindow):
         cl.addWidget(right, 1)
         self.setCentralWidget(central)
 
-        # status bar
-        status = QStatusBar()
-        self.status_label = QLabel("Готово")
-        self.mic_label = QLabel()
-        self.speaking_label = QLabel()
-        status.addWidget(self.status_label, 1)
-        status.addPermanentWidget(self.speaking_label)
-        status.addPermanentWidget(self.mic_label)
-        self.setStatusBar(status)
-        self._error_timer = QTimer(self)
-        self._error_timer.setSingleShot(True)
-        self._error_timer.timeout.connect(lambda: self.status_label.setStyleSheet(""))
-
         controller.status.connect(self._on_status)
-        controller.audio_status.connect(self.mic_label.setText)
-        controller.error.connect(self._on_error)
+        controller.audio_status.connect(lambda _t: self._refresh_status_card())
+        controller.error.connect(lambda text: self.toasts.show(text, "error"))
+        controller.notify.connect(lambda text, kind: self.toasts.show(text, kind))
         controller.speaking_changed.connect(self._on_speaking)
         controller.config_changed.connect(self._on_config_changed)
-        controller.hotkeys_toggled.connect(lambda _e: self._update_hotkey_hint())
+        controller.hotkeys_toggled.connect(lambda _e: self._refresh_status_card())
         self._refresh_voices()
-        self._update_hotkey_hint()
-        self.mic_label.setText(controller.audio_summary())
+        self._refresh_status_card()
+
+    # ------------------------------------------------------------ building
+
+    def _build_sidebar(self) -> QFrame:
+        sidebar = QFrame()
+        sidebar.setObjectName("sidebar")
+        sidebar.setFixedWidth(236)
+        sidebar.setStyleSheet(
+            f"QFrame#sidebar {{ background: {theme.BG_2}; border-right: 1px solid {theme.BORDER}; }}"
+        )
+        brand = QHBoxLayout()
+        brand.setContentsMargins(20, 20, 16, 14)
+        brand.setSpacing(12)
+        logo = QLabel()
+        logo.setPixmap(render_logo(40))
+        name = QLabel(
+            "<span style='font-size:15pt; font-weight:750'>KMuted</span><br>"
+            f"<span style='color:{theme.MUTED}; font-size:8.5pt'>голос из текста · v{__version__}</span>"
+        )
+        brand.addWidget(logo)
+        brand.addWidget(name, 1)
+
+        self.nav = NavBar(PAGES)
+
+        # live status card at the bottom
+        status = QFrame()
+        status.setObjectName("card")
+        sl = QVBoxLayout(status)
+        sl.setContentsMargins(14, 12, 14, 12)
+        sl.setSpacing(8)
+        air = QHBoxLayout()
+        self.eq = Equalizer()
+        self.air_label = QLabel("Тишина")
+        self.air_label.setObjectName("h3")
+        air.addWidget(self.eq)
+        air.addWidget(self.air_label, 1)
+        sl.addLayout(air)
+        mic = QHBoxLayout()
+        mic.setSpacing(8)
+        self.mic_dot = StatusDot()
+        self.mic_label = QLabel()
+        self.mic_label.setObjectName("hint")
+        mic.addWidget(self.mic_dot)
+        mic.addWidget(self.mic_label, 1)
+        sl.addLayout(mic)
+        keys = QHBoxLayout()
+        keys.setSpacing(8)
+        self.keys_dot = StatusDot()
+        self.keys_label = QLabel()
+        self.keys_label.setObjectName("hint")
+        keys.addWidget(self.keys_dot)
+        keys.addWidget(self.keys_label, 1)
+        sl.addLayout(keys)
+
+        lay = QVBoxLayout(sidebar)
+        lay.setContentsMargins(0, 0, 0, 14)
+        lay.setSpacing(6)
+        lay.addLayout(brand)
+        lay.addWidget(self.nav)
+        lay.addStretch(1)
+        holder = QHBoxLayout()
+        holder.setContentsMargins(12, 0, 12, 0)
+        holder.addWidget(status)
+        lay.addLayout(holder)
+        return sidebar
+
+    def _build_composer(self) -> QWidget:
+        bar = QFrame()
+        bar.setObjectName("card")
+        bl = QHBoxLayout(bar)
+        bl.setContentsMargins(10, 8, 8, 8)
+        bl.setSpacing(8)
+        self.voice_combo = QComboBox()
+        self.voice_combo.setMinimumWidth(190)
+        self.voice_combo.setToolTip("Голос по умолчанию")
+        self.voice_combo.currentIndexChanged.connect(self._voice_picked)
+        self.quick = QLineEdit()
+        self.quick.setPlaceholderText("Напишите что-нибудь и нажмите Enter — прозвучит в микрофоне…")
+        self.quick.setClearButtonEnabled(True)
+        self.quick.returnPressed.connect(self._quick_say)
+        self.quick.addAction(icon("send", theme.FAINT, 16), QLineEdit.LeadingPosition)
+        say = make_button("Сказать", "send", "primary")
+        say.clicked.connect(self._quick_say)
+        stop = make_button("", "stop", tooltip="Остановить речь")
+        stop.clicked.connect(self.controller.stop)
+        bl.addWidget(self.voice_combo)
+        bl.addWidget(self.quick, 1)
+        bl.addWidget(say)
+        bl.addWidget(stop)
+
+        self.status_line = QLabel("Готово")
+        self.status_line.setObjectName("hint")
+        self.status_line.setContentsMargins(6, 0, 0, 0)
+
+        holder = QWidget()
+        hl = QVBoxLayout(holder)
+        hl.setContentsMargins(28, 2, 28, 14)
+        hl.setSpacing(6)
+        hl.addWidget(self.status_line)
+        hl.addWidget(bar)
+        return holder
 
     # ------------------------------------------------------------ reactions
 
-    def _on_status(self, text: str) -> None:
-        self.status_label.setText(text)
+    def page(self, index: int) -> QWidget:
+        """The page widget at ``index``, created on first use."""
+        page = self._pages[index]
+        if page is None:
+            page = self._factories[index](self.controller)
+            if isinstance(page, HomePage):
+                page.navigate.connect(self.go_to)
+            placeholder = self.stack.widget(index)
+            self.stack.insertWidget(index, page)
+            self.stack.removeWidget(placeholder)
+            placeholder.deleteLater()
+            self._pages[index] = page
+        return page
 
-    def _on_error(self, text: str) -> None:
-        self.status_label.setText(f"⚠ {text}")
-        self.status_label.setStyleSheet(f"color: {theme.DANGER};")
-        self._error_timer.start(8000)
+    def _open_page(self, index: int) -> None:
+        self.page(index)
+        if self.stack.currentIndex() != index:
+            self.stack.fade_to(index)
+
+    def go_to(self, index: int) -> None:
+        self.nav.set_current(index)
+
+    def _on_status(self, text: str) -> None:
+        self.status_line.setText(text)
 
     def _on_speaking(self, speaking: bool) -> None:
-        self.speaking_label.setText("🔴 В эфире" if speaking else "")
-        self.speaking_label.setStyleSheet(f"color: {theme.ACCENT_2}; font-weight: 600;" if speaking else "")
+        self.eq.set_active(speaking)
+        self.air_label.setText("В эфире" if speaking else "Тишина")
+        self.air_label.setStyleSheet(f"color: {theme.ACCENT_2};" if speaking else "")
+        self._refresh_status_card(speaking)
+
+    def _refresh_status_card(self, speaking: bool = False) -> None:
+        c = self.controller
+        if c.audio.mic_ready:
+            name = c.audio.mic.device.name
+            self.mic_dot.set_state(theme.ACCENT_2 if speaking else theme.SUCCESS, pulse=speaking)
+            self.mic_label.setText(self.mic_label.fontMetrics().elidedText(name, Qt.ElideRight, 160))
+            self.mic_label.setToolTip(name)
+            self.nav.buttons[AUDIO_PAGE].badge = ""
+        else:
+            self.mic_dot.set_state(theme.WARNING)
+            self.mic_label.setText("Нет микрофона")
+            self.mic_label.setToolTip(c.audio_summary())
+            self.nav.buttons[AUDIO_PAGE].badge = "!" if c._audio_enabled else ""
+        self.nav.buttons[AUDIO_PAGE].update()
+        enabled = c.config.general.hotkeys_enabled and c.hotkeys.running
+        self.keys_dot.set_state(theme.SUCCESS if enabled else theme.WARNING)
+        self.keys_label.setText("Клавиши активны" if enabled else "Клавиши выключены")
 
     def _on_config_changed(self, section: str) -> None:
         if section in ("voices", "general"):
             self._refresh_voices()
-        self._update_hotkey_hint()
+        if section == "general":
+            self._refresh_status_card()
 
     def _refresh_voices(self) -> None:
         cfg = self.controller.config
         fill_voice_combo(self.voice_combo, cfg.voices, cfg.active_voice().id, include_default=False)
+        for i in range(self.voice_combo.count()):
+            voice = cfg.voice_by_id(self.voice_combo.itemData(i))
+            if voice is not None:
+                self.voice_combo.setItemIcon(i, icon(_ENGINE_ICON.get(voice.engine, "voices"), theme.MUTED, 16))
 
     def _voice_picked(self) -> None:
         voice_id = self.voice_combo.currentData()
@@ -199,36 +268,39 @@ class MainWindow(QMainWindow):
             self.controller.say(text)
             self.quick.clear()
 
-    def _update_hotkey_hint(self) -> None:
-        g = self.controller.config.general
-        lines = []
-        if g.input_hotkey:
-            lines.append(f"<b>{format_combo(g.input_hotkey)}</b> — написать")
-        for w in self.controller.config.wheels[:3]:
-            if w.hotkey:
-                lines.append(f"<b>{format_combo(w.hotkey)}</b> — колесо «{w.name}»")
-        if g.stop_hotkey:
-            lines.append(f"<b>{format_combo(g.stop_hotkey)}</b> — стоп")
-        if not g.hotkeys_enabled:
-            lines.insert(0, f"<span style='color:{theme.WARNING}'>Горячие клавиши на паузе</span>")
-        self.hotkey_hint.setText("<br>".join(lines))
-
     # ------------------------------------------------------------ window
 
+    def showEvent(self, event) -> None:  # noqa: N802
+        super().showEvent(event)
+        winapi.style_window(int(self.winId()), theme.BG_2, theme.BORDER)
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self.toasts._relayout()
+
     def closeEvent(self, event) -> None:  # noqa: N802
-        if not self.quitting and self.controller.config.general.close_to_tray and self._has_tray():
+        g = self.controller.config.general
+        if not self.quitting and g.close_to_tray and self._has_tray():
             event.ignore()
             self.hide()
-            if not self._tray_hint_shown:
-                self._tray_hint_shown = True
+            if not g.tray_hint_shown:
+                g.tray_hint_shown = True
+                self.controller.edited("tray")
                 self.tray.showMessage("KMuted работает в трее", "Горячие клавиши активны. Выход — через меню значка.")
+            QTimer.singleShot(1500, lambda: None if self.isVisible() else winapi.trim_memory())
             return
         event.accept()
+        if not self.quitting:  # closing without a tray means "quit"
+            self.quitting = True
+            QApplication.quit()
 
     def _has_tray(self) -> bool:
-        return getattr(self, "tray", None) is not None and self.tray.isVisible()
+        return self.tray is not None and self.tray.isVisible()
 
     def show_and_raise(self) -> None:
         self.showNormal()
         self.raise_()
         self.activateWindow()
+
+
+_ENGINE_ICON = {"edge": "globe", "sapi": "windows", "piper": "cpu"}

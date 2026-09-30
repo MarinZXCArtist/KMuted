@@ -12,10 +12,12 @@ import hashlib
 import json
 import logging
 import threading
+import time
 from collections import OrderedDict
 from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Iterable
 
+import numpy as np
 import soundfile as sf
 
 from kmuted import paths
@@ -29,8 +31,26 @@ from kmuted.tts.sapi import SapiEngine
 
 log = logging.getLogger(__name__)
 
-MEMORY_CACHE_ITEMS = 200
+MEMORY_CACHE_BYTES = 24 * 1024 * 1024  # ~9 minutes of 24 kHz speech
 DISK_CACHE_FILES = 600
+FAILED_RETRY_S = 120.0  # don't hammer an offline service while prewarming
+
+
+class _Cached:
+    """Clip stored as int16 — half the RAM of float32."""
+
+    __slots__ = ("pcm", "rate")
+
+    def __init__(self, clip: Clip) -> None:
+        self.pcm = np.clip(clip.samples * 32767.0, -32768, 32767).astype(np.int16)
+        self.rate = clip.sample_rate
+
+    @property
+    def nbytes(self) -> int:
+        return self.pcm.nbytes
+
+    def clip(self) -> Clip:
+        return Clip(self.pcm.astype(np.float32) / 32767.0, self.rate)
 
 
 def cache_key(text: str, profile: VoiceProfile) -> str:
@@ -44,7 +64,9 @@ class SpeechService:
             e.key: e for e in (EdgeEngine(), SapiEngine(), PiperEngine())
         }
         self.rvc = RVCClient(rvc_url)
-        self._memory: OrderedDict[str, Clip] = OrderedDict()
+        self._memory: OrderedDict[str, _Cached] = OrderedDict()
+        self._memory_bytes = 0
+        self._failed: dict[str, float] = {}
         self._lock = threading.Lock()
         self._pool = ThreadPoolExecutor(max_workers=3, thread_name_prefix="tts")
         self._warm_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="tts-warm")
@@ -59,10 +81,16 @@ class SpeechService:
 
     def prewarm(self, items: Iterable[tuple[str, VoiceProfile]]) -> None:
         """Synthesize fixed phrases in the background (errors are ignored)."""
+        now = time.monotonic()
+        seen = set()
         for text, profile in items:
             text = text.strip()
-            if not text or self._memory_get(cache_key(text, profile)) is not None:
+            key = cache_key(text, profile)
+            if not text or key in seen or self._memory_has(key):
                 continue
+            if now - self._failed.get(key, -FAILED_RETRY_S) < FAILED_RETRY_S:
+                continue
+            seen.add(key)
             snapshot = dataclasses.replace(profile)
             self._warm_pool.submit(self._warm_one, text, snapshot)
 
@@ -84,6 +112,8 @@ class SpeechService:
     def clear_cache(self) -> None:
         with self._lock:
             self._memory.clear()
+            self._memory_bytes = 0
+            self._failed.clear()
         for f in self._disk.glob("*.wav"):
             f.unlink(missing_ok=True)
 
@@ -112,21 +142,32 @@ class SpeechService:
         try:
             self.synthesize(text, profile, persist=True)
         except Exception as exc:
+            self._failed[cache_key(text, profile)] = time.monotonic()
             log.debug("prewarm failed for %r: %s", text, exc)
+
+    def _memory_has(self, key: str) -> bool:
+        with self._lock:
+            return key in self._memory
 
     def _memory_get(self, key: str) -> Clip | None:
         with self._lock:
-            clip = self._memory.get(key)
-            if clip is not None:
-                self._memory.move_to_end(key)
-            return clip
+            cached = self._memory.get(key)
+            if cached is None:
+                return None
+            self._memory.move_to_end(key)
+        return cached.clip()
 
     def _memory_put(self, key: str, clip: Clip) -> None:
+        cached = _Cached(clip)
         with self._lock:
-            self._memory[key] = clip
-            self._memory.move_to_end(key)
-            while len(self._memory) > MEMORY_CACHE_ITEMS:
-                self._memory.popitem(last=False)
+            old = self._memory.pop(key, None)
+            if old is not None:
+                self._memory_bytes -= old.nbytes
+            self._memory[key] = cached
+            self._memory_bytes += cached.nbytes
+            while self._memory_bytes > MEMORY_CACHE_BYTES and len(self._memory) > 1:
+                _key, dropped = self._memory.popitem(last=False)
+                self._memory_bytes -= dropped.nbytes
 
     def _disk_get(self, key: str) -> Clip | None:
         path = self._disk / f"{key}.wav"

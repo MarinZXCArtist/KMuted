@@ -13,7 +13,6 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QListWidget,
     QListWidgetItem,
-    QPushButton,
     QSpinBox,
     QTableWidget,
     QTableWidgetItem,
@@ -24,7 +23,9 @@ from PySide6.QtWidgets import (
 from kmuted.config import WHEEL_MAX_SLOTS, WHEEL_MIN_SLOTS, Wheel, WheelSlot
 from kmuted.hotkeys.keys import format_combo
 from kmuted.ui import theme
+from kmuted.ui.icons import icon
 from kmuted.ui.overlay_wheel import WheelPreview
+from kmuted.ui.components import make_button
 from kmuted.ui.widgets import HotkeyEdit, fill_voice_combo, page_header
 
 _DIRECTIONS_8 = ["↑", "↗", "→", "↘", "↓", "↙", "←", "↖"]
@@ -40,11 +41,9 @@ class WheelsPage(QWidget):
         self.list = QListWidget()
         self.list.setFixedWidth(180)
         self.list.currentRowChanged.connect(self._load_wheel)
-        add = QPushButton("+ Колесо")
-        add.setObjectName("primary")
+        add = make_button("Колесо", "plus", "primary")
         add.clicked.connect(self.add_wheel)
-        remove = QPushButton("Удалить")
-        remove.setObjectName("danger")
+        remove = make_button("Удалить", "trash", "danger")
         remove.clicked.connect(self.remove_wheel)
         left_buttons = QHBoxLayout()
         left_buttons.addWidget(add)
@@ -113,7 +112,7 @@ class WheelsPage(QWidget):
         # right: preview
         self.preview = WheelPreview()
         self.preview.setMinimumSize(280, 280)
-        test = QPushButton("▶ Сказать выбранную фразу")
+        test = make_button("Сказать выбранную фразу", "play")
         test.clicked.connect(self._say_selected)
         right_box = QWidget()
         right_box.setFixedWidth(300)
@@ -131,7 +130,7 @@ class WheelsPage(QWidget):
         self.editor_widgets = [self.name, self.hotkey, self.count, self.table, self.slot_voice, test]
 
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(24, 20, 24, 16)
+        lay.setContentsMargins(28, 24, 28, 12)
         lay.addWidget(
             page_header(
                 "Колёса фраз",
@@ -162,7 +161,7 @@ class WheelsPage(QWidget):
         self.list.clear()
         for w in wheels:
             key = format_combo(w.hotkey)
-            item = QListWidgetItem(f"{w.name}\n{key or 'без клавиши'}")
+            item = QListWidgetItem(icon("wheel", theme.ACCENT, 18), f"{w.name}\n{key or 'без клавиши'}")
             self.list.addItem(item)
         self.list.blockSignals(False)
         if wheels:

@@ -6,13 +6,9 @@ from PySide6.QtCore import QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QButtonGroup,
-    QCheckBox,
-    QFormLayout,
-    QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
-    QPushButton,
     QRadioButton,
     QScrollArea,
     QVBoxLayout,
@@ -22,13 +18,14 @@ from PySide6.QtWidgets import (
 from kmuted import __version__, paths
 from kmuted.config import WHEEL_HOLD, WHEEL_TOGGLE
 from kmuted.ui import theme
-from kmuted.ui.widgets import HotkeyEdit, ValueSlider, page_header, run_in_background
+from kmuted.ui.components import SectionTitle, SettingRow, ToggleSwitch, make_button, page_header
+from kmuted.ui.widgets import HotkeyEdit, ValueSlider, run_in_background
 
 _HOTKEYS = [
-    ("input_hotkey", "Окно ввода текста", "Открывает поле по центру экрана: пишете — Enter — звучит."),
-    ("stop_hotkey", "Остановить речь", "Мгновенно обрывает озвучку и очищает очередь."),
-    ("next_voice_hotkey", "Следующий голос", "Переключает основной голос по кругу."),
-    ("toggle_hotkeys_hotkey", "Пауза горячих клавиш", "Включает/выключает все остальные горячие клавиши."),
+    ("input_hotkey", "Окно ввода текста", "Поле по центру экрана: пишете, Enter — звучит", "keyboard"),
+    ("stop_hotkey", "Остановить речь", "Мгновенно обрывает озвучку и очищает очередь", "stop"),
+    ("next_voice_hotkey", "Следующий голос", "Переключает основной голос по кругу", "voices"),
+    ("toggle_hotkeys_hotkey", "Пауза горячих клавиш", "Включает и выключает все остальные клавиши", "power"),
 ]
 
 
@@ -40,20 +37,119 @@ class SettingsPage(QWidget):
 
         content = QWidget()
         lay = QVBoxLayout(content)
-        lay.setContentsMargins(24, 20, 24, 16)
-        lay.setSpacing(12)
-        lay.addWidget(page_header("Настройки"))
-        lay.addWidget(self._hotkeys_group())
-        lay.addWidget(self._wheel_group())
-        lay.addWidget(self._input_group())
-        lay.addWidget(self._app_group())
-        lay.addWidget(self._rvc_group())
+        lay.setContentsMargins(28, 24, 28, 20)
+        lay.setSpacing(8)
+        lay.addWidget(page_header("Настройки", "Горячие клавиши, поведение окон и приложения."))
+
+        # hotkeys
+        lay.addWidget(SectionTitle("Горячие клавиши"))
+        self.hotkeys_enabled = ToggleSwitch()
+        self.hotkeys_enabled.toggled.connect(self._toggle_hotkeys)
+        self.hook_row = SettingRow("Горячие клавиши включены", "", self.hotkeys_enabled, "zap")
+        lay.addWidget(self.hook_row)
+        self.hotkey_edits: dict[str, HotkeyEdit] = {}
+        self.hotkey_rows: dict[str, SettingRow] = {}
+        self._hotkey_tips: dict[str, str] = {}
+        for attr, title, tip, icon_name in _HOTKEYS:
+            edit = HotkeyEdit()
+            edit.setFixedWidth(260)
+            edit.changed.connect(lambda combo, a=attr: self._set_hotkey(a, combo))
+            row = SettingRow(title, tip, edit, icon_name)
+            lay.addWidget(row)
+            self.hotkey_edits[attr] = edit
+            self.hotkey_rows[attr] = row
+            self._hotkey_tips[attr] = tip
+        note = QLabel(
+            "Клавиши не блокируются для игры — выбирайте сочетания, которые игра не использует "
+            "(Alt+цифры, F-клавиши, боковые кнопки мыши). Если игра запущена от администратора, "
+            "запустите KMuted тоже от администратора — иначе Windows не передаст ему нажатия."
+        )
+        note.setObjectName("hint")
+        note.setWordWrap(True)
+        note.setContentsMargins(6, 4, 6, 0)
+        lay.addWidget(note)
+
+        # wheel
+        lay.addWidget(SectionTitle("Колесо фраз"))
+        modes = QWidget()
+        ml = QVBoxLayout(modes)
+        ml.setContentsMargins(0, 0, 0, 0)
+        self.wheel_hold = QRadioButton("Зажать → навести → отпустить")
+        self.wheel_toggle = QRadioButton("Нажать → навести → нажать ещё раз")
+        group = QButtonGroup(modes)
+        group.addButton(self.wheel_hold)
+        group.addButton(self.wheel_toggle)
+        ml.addWidget(self.wheel_hold)
+        ml.addWidget(self.wheel_toggle)
+        self.wheel_hold.toggled.connect(lambda on: on and self._set("wheel_mode", WHEEL_HOLD))
+        self.wheel_toggle.toggled.connect(lambda on: on and self._set("wheel_mode", WHEEL_TOGGLE))
+        lay.addWidget(SettingRow("Как выбирать фразу", "Первый вариант быстрее в играх; во втором Esc — отмена", modes, "wheel"))
+        self.deadzone = ValueSlider(10, 200, 40, lambda v: f"{v} px")
+        self.deadzone.setFixedWidth(260)
+        self.deadzone.valueChanged.connect(lambda v: self._set("wheel_deadzone", v))
+        lay.addWidget(
+            SettingRow("Мёртвая зона", "Насколько сдвинуть мышь для выбора. Отпустили в центре — отмена", self.deadzone, "mouse")
+        )
+
+        # input overlay
+        lay.addWidget(SectionTitle("Окно ввода"))
+        self.keep_open = ToggleSwitch()
+        self.keep_open.toggled.connect(lambda v: self._set("input_keep_open", v))
+        lay.addWidget(SettingRow("Не закрывать после отправки", "Удобно, когда пишете несколько фраз подряд", self.keep_open, "send"))
+        self.restore_focus = ToggleSwitch()
+        self.restore_focus.toggled.connect(lambda v: self._set("input_restore_focus", v))
+        lay.addWidget(
+            SettingRow(
+                "Возвращать фокус в игру",
+                "Окно и колесо видны поверх игр в режиме «Оконный» / «Без рамки»",
+                self.restore_focus,
+                "gamepad",
+            )
+        )
+
+        # app
+        lay.addWidget(SectionTitle("Приложение"))
+        self.start_minimized = ToggleSwitch()
+        self.start_minimized.toggled.connect(lambda v: self._set("start_minimized", v))
+        lay.addWidget(SettingRow("Запускать свёрнутым в трей", "", self.start_minimized, "download"))
+        self.close_to_tray = ToggleSwitch()
+        self.close_to_tray.toggled.connect(lambda v: self._set("close_to_tray", v))
+        lay.addWidget(
+            SettingRow("Крестик сворачивает в трей", "KMuted продолжает работать и слушать горячие клавиши", self.close_to_tray, "x")
+        )
+        buttons = QWidget()
+        bl = QHBoxLayout(buttons)
+        bl.setContentsMargins(0, 0, 0, 0)
+        folder = make_button("Папка настроек", "folder")
+        folder.clicked.connect(lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(paths.data_dir()))))
+        clear = make_button("Очистить кэш", "trash")
+        clear.clicked.connect(self._clear_cache)
+        bl.addWidget(folder)
+        bl.addWidget(clear)
+        lay.addWidget(SettingRow("Данные", "Настройки, кэш озвучки, голоса и свои картинки (папка assets)", buttons, "folder"))
+
+        # rvc
+        lay.addWidget(SectionTitle("RVC-сервер (свои голоса)"))
+        rvc = QWidget()
+        rl = QHBoxLayout(rvc)
+        rl.setContentsMargins(0, 0, 0, 0)
+        self.rvc_url = QLineEdit()
+        self.rvc_url.setFixedWidth(230)
+        self.rvc_url.editingFinished.connect(lambda: self._set("rvc_server_url", self.rvc_url.text().strip()))
+        check = make_button("Проверить", "refresh")
+        check.clicked.connect(self._check_rvc)
+        rl.addWidget(self.rvc_url)
+        rl.addWidget(check)
+        self.rvc_row = SettingRow("Адрес сервера", "Запускается файлом start_rvc_server.bat", rvc, "wand")
+        lay.addWidget(self.rvc_row)
+
         about = QLabel(
             f"KMuted {__version__} · говорите в войсе текстом · "
             "<a href='https://github.com/MarinZXCArtist/KMuted'>GitHub</a>"
         )
         about.setObjectName("hint")
         about.setOpenExternalLinks(True)
+        about.setContentsMargins(6, 14, 0, 0)
         lay.addWidget(about)
         lay.addStretch(1)
 
@@ -65,121 +161,8 @@ class SettingsPage(QWidget):
         outer.addWidget(scroll)
 
         controller.hotkeys_toggled.connect(self._on_hotkeys_toggled)
+        controller.config_changed.connect(lambda s: s in ("phrases", "wheels") and self._update_warnings())
         self.load()
-
-    # ------------------------------------------------------------ groups
-
-    def _hotkeys_group(self) -> QGroupBox:
-        box = QGroupBox("Горячие клавиши")
-        form = QFormLayout(box)
-        form.setSpacing(8)
-        self.hotkeys_enabled = QCheckBox("Горячие клавиши включены")
-        self.hotkeys_enabled.toggled.connect(self._toggle_hotkeys)
-        form.addRow(self.hotkeys_enabled)
-        self.hotkey_edits: dict[str, HotkeyEdit] = {}
-        self.hotkey_warnings: dict[str, QLabel] = {}
-        for attr, title, tip in _HOTKEYS:
-            edit = HotkeyEdit()
-            edit.setToolTip(tip)
-            edit.changed.connect(lambda combo, a=attr: self._set_hotkey(a, combo))
-            warn = QLabel()
-            warn.setStyleSheet(f"color: {theme.WARNING};")
-            warn.hide()
-            col = QVBoxLayout()
-            col.setSpacing(2)
-            col.addWidget(edit)
-            col.addWidget(warn)
-            form.addRow(title, col)
-            self.hotkey_edits[attr] = edit
-            self.hotkey_warnings[attr] = warn
-        self.hook_status = QLabel()
-        self.hook_status.setWordWrap(True)
-        self.hook_status.setObjectName("hint")
-        form.addRow(self.hook_status)
-        note = QLabel(
-            "Клавиши не блокируются для игры — выбирайте сочетания, которые игра не использует "
-            "(например Alt+цифры или боковые кнопки мыши). Если игра запущена от администратора, "
-            "запустите KMuted тоже от администратора, иначе Windows не передаст ему нажатия."
-        )
-        note.setObjectName("hint")
-        note.setWordWrap(True)
-        form.addRow(note)
-        return box
-
-    def _wheel_group(self) -> QGroupBox:
-        box = QGroupBox("Колесо фраз")
-        self.wheel_hold = QRadioButton("Зажать клавишу → навести → отпустить (быстро, для игр)")
-        self.wheel_toggle = QRadioButton("Нажать → навести → нажать ещё раз (Esc — отмена)")
-        group = QButtonGroup(box)
-        group.addButton(self.wheel_hold)
-        group.addButton(self.wheel_toggle)
-        self.wheel_hold.toggled.connect(lambda on: on and self._set("wheel_mode", WHEEL_HOLD))
-        self.wheel_toggle.toggled.connect(lambda on: on and self._set("wheel_mode", WHEEL_TOGGLE))
-        self.deadzone = ValueSlider(10, 200, 40, lambda v: f"{v} px")
-        self.deadzone.valueChanged.connect(lambda v: self._set("wheel_deadzone", v))
-        form = QFormLayout(box)
-        form.addRow(self.wheel_hold)
-        form.addRow(self.wheel_toggle)
-        form.addRow("Мёртвая зона", self.deadzone)
-        hint = QLabel("Насколько сдвинуть мышь, чтобы выбрать фразу. Отпустили в центре — ничего не скажется.")
-        hint.setObjectName("hint")
-        hint.setWordWrap(True)
-        form.addRow(hint)
-        return box
-
-    def _input_group(self) -> QGroupBox:
-        box = QGroupBox("Окно ввода")
-        self.keep_open = QCheckBox("Не закрывать после отправки (для переписки подряд)")
-        self.keep_open.toggled.connect(lambda v: self._set("input_keep_open", v))
-        self.restore_focus = QCheckBox("Возвращать фокус в игру после закрытия")
-        self.restore_focus.toggled.connect(lambda v: self._set("input_restore_focus", v))
-        lay = QVBoxLayout(box)
-        lay.addWidget(self.keep_open)
-        lay.addWidget(self.restore_focus)
-        hint = QLabel(
-            "Окно ввода и колесо видны поверх игр в режиме «Оконный» или «Без рамки». "
-            "В эксклюзивном полноэкранном режиме Windows не показывает чужие окна."
-        )
-        hint.setObjectName("hint")
-        hint.setWordWrap(True)
-        lay.addWidget(hint)
-        return box
-
-    def _app_group(self) -> QGroupBox:
-        box = QGroupBox("Приложение")
-        self.start_minimized = QCheckBox("Запускать свёрнутым в трей")
-        self.start_minimized.toggled.connect(lambda v: self._set("start_minimized", v))
-        self.close_to_tray = QCheckBox("Крестик сворачивает в трей (KMuted продолжает работать)")
-        self.close_to_tray.toggled.connect(lambda v: self._set("close_to_tray", v))
-        folder = QPushButton("Открыть папку настроек")
-        folder.clicked.connect(lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(paths.data_dir()))))
-        clear = QPushButton("Очистить кэш озвучки")
-        clear.clicked.connect(self._clear_cache)
-        row = QHBoxLayout()
-        row.addWidget(folder)
-        row.addWidget(clear)
-        row.addStretch(1)
-        lay = QVBoxLayout(box)
-        lay.addWidget(self.start_minimized)
-        lay.addWidget(self.close_to_tray)
-        lay.addLayout(row)
-        return box
-
-    def _rvc_group(self) -> QGroupBox:
-        box = QGroupBox("RVC-сервер (свои голоса)")
-        self.rvc_url = QLineEdit()
-        self.rvc_url.editingFinished.connect(lambda: self._set("rvc_server_url", self.rvc_url.text().strip()))
-        check = QPushButton("Проверить")
-        check.clicked.connect(self._check_rvc)
-        self.rvc_status = QLabel()
-        self.rvc_status.setObjectName("hint")
-        row = QHBoxLayout()
-        row.addWidget(self.rvc_url, 1)
-        row.addWidget(check)
-        form = QFormLayout(box)
-        form.addRow("Адрес", row)
-        form.addRow("", self.rvc_status)
-        return box
 
     # ------------------------------------------------------------ data
 
@@ -200,12 +183,14 @@ class SettingsPage(QWidget):
         self._loading = False
         self._update_warnings()
         error = self.controller.hotkeys_error()
+        row = self.hook_row
         if error:
-            self.hook_status.setText(f"<span style='color:{theme.DANGER}'>{error}</span>")
+            row.subtitle.setText(f"<span style='color:{theme.DANGER}'>{error}</span>")
         elif self.controller.hotkeys.running:
-            self.hook_status.setText("🟢 Перехват клавиш работает")
+            row.subtitle.setText(f"<span style='color:{theme.SUCCESS}'>● Перехват клавиш работает</span>")
         else:
-            self.hook_status.setText("Перехват клавиш выключен (запуск с --no-hotkeys)")
+            row.subtitle.setText("Перехват клавиш выключен (запуск с --no-hotkeys)")
+        row.subtitle.setVisible(True)
 
     def _set(self, attr: str, value) -> None:
         if self._loading:
@@ -222,10 +207,12 @@ class SettingsPage(QWidget):
 
     def _update_warnings(self) -> None:
         g = self.controller.config.general
-        for attr, warn in self.hotkey_warnings.items():
+        for attr, row in self.hotkey_rows.items():
             text = self.controller.hotkey_conflict(getattr(g, attr), f"general:{attr}")
-            warn.setText(text)
-            warn.setVisible(bool(text))
+            if text:
+                row.subtitle.setText(f"<span style='color:{theme.WARNING}'>{text}</span>")
+            else:
+                row.subtitle.setText(self._hotkey_tips[attr])
 
     def _toggle_hotkeys(self, enabled: bool) -> None:
         if not self._loading and enabled != self.controller.config.general.hotkeys_enabled:
@@ -238,17 +225,19 @@ class SettingsPage(QWidget):
 
     def _clear_cache(self) -> None:
         self.controller.speech.clear_cache()
-        self.controller.status.emit("Кэш озвучки очищен")
+        self.controller.notify.emit("Кэш озвучки очищен", "success")
         self.controller.prewarm()
 
     def _check_rvc(self) -> None:
         self._set("rvc_server_url", self.rvc_url.text().strip())
-        self.rvc_status.setText("Проверяю…")
+        self.rvc_row.subtitle.setText("Проверяю…")
 
         def done(models, error) -> None:
             if error is not None:
-                self.rvc_status.setText(f"🔴 {error}")
+                self.rvc_row.subtitle.setText(f"<span style='color:{theme.DANGER}'>{error}</span>")
             else:
-                self.rvc_status.setText(f"🟢 Сервер работает, моделей: {len(models)}")
+                self.rvc_row.subtitle.setText(
+                    f"<span style='color:{theme.SUCCESS}'>● Сервер работает, моделей: {len(models)}</span>"
+                )
 
         run_in_background(self.controller.speech.rvc.list_models, done)

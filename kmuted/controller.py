@@ -15,7 +15,7 @@ from kmuted.audio import devices
 from kmuted.audio.dsp import Clip
 from kmuted.audio.engine import AudioEngine
 from kmuted.config import Config, VoiceProfile
-from kmuted.hotkeys.keys import format_combo
+from kmuted.hotkeys.keys import format_combo, parse_combo
 from kmuted.hotkeys.listener import GlobalHotkeys
 from kmuted.hotkeys.ptt import PushToTalk
 from kmuted.tts.base import TTSError
@@ -44,6 +44,7 @@ class Controller(QObject):
     status = Signal(str)
     audio_status = Signal(str)
     error = Signal(str)
+    notify = Signal(str, str)  # text, kind (info/success/warning) — shown as a toast
     speaking_changed = Signal(bool)
     config_changed = Signal(str)  # section: phrases/wheels/voices/audio/general
     hotkeys_toggled = Signal(bool)
@@ -72,6 +73,8 @@ class Controller(QObject):
         self._speaking = False
         self._wheel = None
         self._wheel_combo = ""
+        self._wheel_key = ""
+        self._wheel_released_ticks = 0
         self._last_cursor = None
 
         self._hotkey_down.connect(self._on_hotkey_down, Qt.QueuedConnection)
@@ -136,7 +139,6 @@ class Controller(QObject):
         if not self._audio_enabled:
             return
         a = self.config.audio
-        self.ptt.release()
         self.ptt.set_key(a.ptt_key)
         self.hotkeys.ignore_injected([self.ptt.key_name] if self.ptt.key_name else [])
         self._ptt_release_timer.setInterval(max(0, a.ptt_tail_ms))
@@ -148,6 +150,23 @@ class Controller(QObject):
             log.exception("audio configure failed")
             self.audio.errors["mic"] = f"Ошибка звука: {exc}"
         self.audio_status.emit(self.audio_summary())
+
+    def detect_cable(self) -> str:
+        """Find a virtual cable and select it if none is chosen; returns its name."""
+        name = devices.guess_virtual_cable()
+        if name and self.config.audio.mic_device != name and not self.audio.mic_ready:
+            self.config.audio.mic_device = name
+            self.edited("audio")
+        elif name:
+            self.audio.retry()
+            self.audio_status.emit(self.audio_summary())
+        return name
+
+    def refresh_audio(self) -> None:
+        """Re-scan devices and reopen streams (after plugging something in)."""
+        if self._audio_enabled:
+            self.audio.retry()
+            self.audio_status.emit(self.audio_summary())
 
     def audio_summary(self) -> str:
         if not self._audio_enabled:
@@ -170,7 +189,7 @@ class Controller(QObject):
         idx = voices.index(current)
         nxt = voices[(idx + step) % len(voices)]
         self.set_active_voice(nxt.id)
-        self.status.emit(f"Голос: {nxt.name}")
+        self.notify.emit(f"Голос: {nxt.name}", "info")
         return nxt
 
     # --- speaking -------------------------------------------------------------
@@ -322,13 +341,16 @@ class Controller(QObject):
         self.config.general.hotkeys_enabled = enabled
         self._save_timer.start()
         self.hotkeys_toggled.emit(enabled)
-        self.status.emit("Горячие клавиши включены" if enabled else "Горячие клавиши на паузе")
+        self.notify.emit(
+            "Горячие клавиши включены" if enabled else "Горячие клавиши на паузе",
+            "success" if enabled else "warning",
+        )
 
     def hotkeys_error(self) -> str:
         return self.hotkeys.error
 
     def _typing_in_app(self) -> bool:
-        if HotkeyEdit.capturing_count:
+        if HotkeyEdit.any_capturing():
             return True
         if QApplication.activeWindow() is None:
             return False
@@ -380,7 +402,7 @@ class Controller(QObject):
 
     def _on_input_submitted(self, text: str, _keep_open: bool) -> None:
         self.config.add_history(text)
-        self._save_timer.start()
+        self.edited("history")
         self.say(text)
 
     def _on_overlay_cycle_voice(self, step: int) -> None:
@@ -405,6 +427,9 @@ class Controller(QObject):
             self.input_overlay.close_overlay(restore=False)
         self._wheel = wheel
         self._wheel_combo = combo
+        parsed = parse_combo(combo)
+        self._wheel_key = parsed[1] if parsed else ""
+        self._wheel_released_ticks = 0
         hint = "нажмите ещё раз, чтобы сказать" if toggle else "отпустите, чтобы сказать"
         self.wheel_overlay.open(wheel.name, wheel.slots, self.config.general.wheel_deadzone, hint)
         self.hotkeys.set_mouse_tracking(True)
@@ -429,6 +454,15 @@ class Controller(QObject):
         else:
             dx, dy = pos.x() - last.x(), pos.y() - last.y()
         self.wheel_overlay.add_delta(dx, dy)
+        # Safety net for hold mode: if the key-up event got lost (e.g. an
+        # elevated window had focus), notice the key is physically up.
+        if self.config.general.wheel_mode == cfgmod.WHEEL_HOLD and self._wheel_key:
+            if self.hotkeys.key_is_down(self._wheel_key) is False:
+                self._wheel_released_ticks += 1
+                if self._wheel_released_ticks >= 4:
+                    self._wheel_confirm()
+            else:
+                self._wheel_released_ticks = 0
 
     def _wheel_confirm(self) -> None:
         slot = self.wheel_overlay.selected_slot()
@@ -443,7 +477,7 @@ class Controller(QObject):
         self._wheel_tick_timer.stop()
         self._wheel_timeout.stop()
         self.hotkeys.set_mouse_tracking(False)
-        self.wheel_overlay.hide()
+        self.wheel_overlay.close_animated()
         if was_toggle:
             self.rebind_hotkeys()
 

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from collections import deque
 from dataclasses import dataclass
 from typing import Callable
@@ -308,6 +309,7 @@ class AudioEngine:
         self.passthrough: PassthroughInput | None = None
         self._settings = None
         self._keys: dict[str, tuple] = {}
+        self._last_retry = 0.0
         self.errors: dict[str, str] = {}
 
     # --- configuration -----------------------------------------------------
@@ -319,7 +321,8 @@ class AudioEngine:
             mic_key = (settings.mic_device,)
             mon_key = (settings.monitor_enabled, settings.monitor_device, settings.mic_device)
             pt_key = (settings.passthrough_enabled, settings.passthrough_device, mic_key)
-            if self._keys.get("mic") != mic_key or not (self.mic and self.mic.alive):
+            mic_dead = self.mic is not None and not self.mic.alive
+            if self._keys.get("mic") != mic_key or mic_dead:
                 self._close_passthrough()
                 self._open_mic(settings)
                 self._keys["mic"] = mic_key
@@ -404,10 +407,7 @@ class AudioEngine:
     def play(self, clip: Clip, lead_ms: int = 0, monitor_only: bool = False) -> bool:
         """Queue ``clip``; returns False if it could not go anywhere."""
         with self._lock:
-            if self._settings is not None:
-                if (self.mic and not self.mic.alive) or (self.monitor and not self.monitor.alive):
-                    self._keys.clear()  # a device vanished: reopen everything
-                    self.configure(self._settings)
+            self._recover()
             sent = False
             if self.mic and not monitor_only:
                 self.mic.mixer.enqueue(clip, lead_ms)
@@ -416,6 +416,25 @@ class AudioEngine:
                 self.monitor.mixer.enqueue(clip, lead_ms)
                 sent = True
             return sent
+
+    def _recover(self) -> None:
+        """Reopen devices that died or were missing (e.g. cable re-plugged)."""
+        s = self._settings
+        if s is None:
+            return
+        dead = (self.mic and not self.mic.alive) or (self.monitor and not self.monitor.alive)
+        missing = (s.mic_device and self.mic is None) or (s.monitor_enabled and self.monitor is None)
+        if dead or (missing and time.monotonic() - self._last_retry > 5.0):
+            self._last_retry = time.monotonic()
+            self._keys.clear()
+            self.configure(s)
+
+    def retry(self) -> None:
+        """Force reopening all devices (after "refresh devices")."""
+        with self._lock:
+            self._keys.clear()
+            if self._settings is not None:
+                self.configure(self._settings)
 
     def stop(self) -> None:
         with self._lock:

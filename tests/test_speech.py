@@ -176,3 +176,35 @@ def test_rvc_client_offline():
     assert not client.is_online()
     with pytest.raises(TTSError):
         client.list_models()
+
+
+def test_memory_cache_is_int16_and_bounded(service, monkeypatch):
+    from kmuted.tts import manager
+
+    svc, engine = service
+    monkeypatch.setattr(manager, "MEMORY_CACHE_BYTES", 40_000)
+    for i in range(10):
+        svc.synthesize(f"фраза {i}", VoiceProfile())
+    assert svc._memory_bytes <= 40_000 or len(svc._memory) == 1
+    cached = next(iter(svc._memory.values()))
+    assert cached.pcm.dtype == np.int16
+    # round trip keeps the signal
+    clip = svc.synthesize("фраза 9", VoiceProfile())
+    assert clip.samples.dtype == np.float32 and np.max(np.abs(clip.samples)) > 0.4
+
+
+def test_failed_prewarm_is_not_retried_immediately(service):
+    svc, _ = service
+
+    class Broken(FakeEngine):
+        def synthesize(self, text, profile):
+            self.calls += 1
+            raise TTSError("offline")
+
+    broken = Broken()
+    svc.engines["edge"] = broken
+    svc.prewarm([("раз", VoiceProfile())])
+    svc._warm_pool.submit(lambda: None).result(timeout=5)
+    svc.prewarm([("раз", VoiceProfile())])
+    svc._warm_pool.submit(lambda: None).result(timeout=5)
+    assert broken.calls == 1

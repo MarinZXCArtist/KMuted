@@ -30,6 +30,8 @@ if IS_WINDOWS:
     _user32.IsWindow.argtypes = [wintypes.HWND]
     _user32.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
     _user32.keybd_event.argtypes = [wintypes.BYTE, wintypes.BYTE, wintypes.DWORD, ctypes.c_void_p]
+    _kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+    _kernel32.SetProcessWorkingSetSize.argtypes = [wintypes.HANDLE, ctypes.c_size_t, ctypes.c_size_t]
 
 _VK_MENU = 0x12
 _KEYEVENTF_KEYUP = 0x0002
@@ -79,3 +81,51 @@ def restore_foreground(hwnd: int) -> None:
             _user32.SetForegroundWindow(hwnd)
         except Exception:
             pass
+
+
+def trim_memory() -> None:
+    """Give unused RAM back to Windows (called when hidden to the tray).
+
+    Python/Qt keep freed pages in the process working set; this makes the
+    "Memory" column in Task Manager drop to what is actually in use. Pages
+    come back transparently on demand.
+    """
+    import gc
+
+    gc.collect()
+    if not IS_WINDOWS:
+        return
+    try:
+        handle = _kernel32.GetCurrentProcess()
+        _kernel32.SetProcessWorkingSetSize(handle, ctypes.c_size_t(-1), ctypes.c_size_t(-1))
+    except Exception:
+        log.debug("working set trim failed", exc_info=True)
+
+
+def style_window(hwnd: int, caption_hex: str, border_hex: str | None = None) -> None:
+    """Dark title bar in our colors (Windows 10 20H1+ / Windows 11)."""
+    if not IS_WINDOWS or not hwnd:
+        return
+    try:
+        dwm = ctypes.WinDLL("dwmapi")
+    except OSError:
+        return
+
+    def set_attr(attr: int, value: int) -> None:
+        data = ctypes.c_int(value)
+        dwm.DwmSetWindowAttribute(wintypes.HWND(hwnd), attr, ctypes.byref(data), ctypes.sizeof(data))
+
+    def colorref(hex_color: str) -> int:
+        h = hex_color.lstrip("#")
+        r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+        return r | (g << 8) | (b << 16)
+
+    try:
+        set_attr(20, 1)  # DWMWA_USE_IMMERSIVE_DARK_MODE
+        set_attr(19, 1)  # same attribute on older Windows 10 builds
+        set_attr(35, colorref(caption_hex))  # DWMWA_CAPTION_COLOR (Windows 11)
+        set_attr(36, colorref("#eceef6"))  # DWMWA_TEXT_COLOR
+        if border_hex:
+            set_attr(34, colorref(border_hex))  # DWMWA_BORDER_COLOR
+    except Exception:
+        log.debug("DWM styling failed", exc_info=True)

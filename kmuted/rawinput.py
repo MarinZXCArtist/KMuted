@@ -105,6 +105,9 @@ class RawMouse(QAbstractNativeEventFilter):
         self.active = False
         device = RAWINPUTDEVICE(0x01, 0x02, RIDEV_REMOVE, None)
         _user32.RegisterRawInputDevices(ctypes.byref(device), 1, ctypes.sizeof(device))
+        if self._installed:  # no per-message Python calls while the wheel is closed
+            QCoreApplication.instance().removeNativeEventFilter(self)
+            self._installed = False
 
     def take_delta(self) -> tuple[int, int]:
         dx, dy = self._dx, self._dy

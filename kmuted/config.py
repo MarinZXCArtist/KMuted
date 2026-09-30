@@ -135,6 +135,7 @@ class GeneralSettings:
     input_restore_focus: bool = True
     start_minimized: bool = False
     close_to_tray: bool = True
+    tray_hint_shown: bool = False
     rvc_server_url: str = "http://127.0.0.1:5050"
 
 

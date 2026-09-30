@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import sys
@@ -35,6 +36,9 @@ def main() -> int:
         str(icon),
         "--paths",
         str(ROOT),
+        # user artwork (assets/README.md) bundled into the exe
+        "--add-data",
+        f"{ROOT / 'assets'}{os.pathsep}assets",
         # Piper ships espeak-ng data files next to its code
         "--collect-data",
         "piper",

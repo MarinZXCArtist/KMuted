@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import threading
+from collections import OrderedDict
 from pathlib import Path
 
 import numpy as np
@@ -22,6 +23,7 @@ from kmuted.tts.base import TTSEngine, TTSError, VoiceInfo
 log = logging.getLogger(__name__)
 
 SENTENCE_PAUSE_S = 0.12
+MAX_LOADED_MODELS = 2  # each model is 20-120 MB of RAM
 
 
 def rate_to_length_scale(rate: int) -> float:
@@ -51,7 +53,7 @@ class PiperEngine(TTSEngine):
     description = "Офлайн нейросетевые голоса. Можно скачать из каталога или добавить свои .onnx модели."
 
     def __init__(self) -> None:
-        self._models: dict[str, object] = {}
+        self._models: OrderedDict[str, object] = OrderedDict()
         self._lock = threading.Lock()  # espeak phonemizer is not thread-safe
 
     def availability(self) -> str:
@@ -76,6 +78,7 @@ class PiperEngine(TTSEngine):
     def _load(self, model_path: str):
         voice = self._models.get(model_path)
         if voice is not None:
+            self._models.move_to_end(model_path)
             return voice
         path = Path(model_path)
         if not path.exists():
@@ -91,6 +94,8 @@ class PiperEngine(TTSEngine):
         except Exception as exc:
             raise TTSError(f"Не удалось загрузить модель Piper: {exc}") from exc
         self._models[model_path] = voice
+        while len(self._models) > MAX_LOADED_MODELS:
+            self._models.popitem(last=False)
         return voice
 
     def synthesize(self, text: str, profile: VoiceProfile) -> Clip:

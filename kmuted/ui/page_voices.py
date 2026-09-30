@@ -9,7 +9,6 @@ from pathlib import Path
 from PySide6.QtCore import QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
-    QCheckBox,
     QComboBox,
     QFileDialog,
     QFormLayout,
@@ -20,10 +19,8 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QMessageBox,
-    QPushButton,
     QScrollArea,
     QSpinBox,
-    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -32,10 +29,13 @@ from kmuted import paths
 from kmuted.config import ENGINE_EDGE, ENGINE_PIPER, ENGINE_SAPI, VoiceProfile, new_id
 from kmuted.tts.base import VoiceInfo
 from kmuted.ui import theme
+from kmuted.ui.components import ToggleSwitch, icon_button, make_button
+from kmuted.ui.icons import icon
 from kmuted.ui.piper_dialog import PiperDownloadDialog
 from kmuted.ui.widgets import InfoBox, ValueSlider, page_header, run_in_background
 
 ALL_LANGS = "*"
+_ENGINE_ICON = {"edge": "globe", "sapi": "windows", "piper": "cpu"}
 RVC_METHODS = [
     ("rmvpe", "rmvpe — лучшее качество"),
     ("harvest", "harvest — медленно, мягко"),
@@ -60,15 +60,13 @@ class VoicesPage(QWidget):
         self.list = QListWidget()
         self.list.setFixedWidth(230)
         self.list.currentRowChanged.connect(lambda _r: self._load_profile())
-        add = QPushButton("+ Новый голос")
-        add.setObjectName("primary")
+        add = make_button("Новый голос", "plus", "primary")
         add.clicked.connect(self.add_profile)
-        dup = QPushButton("Копия")
+        dup = make_button("Копия", "copy")
         dup.clicked.connect(self.duplicate_profile)
-        remove = QPushButton("Удалить")
-        remove.setObjectName("danger")
+        remove = make_button("Удалить", "trash", "danger")
         remove.clicked.connect(self.remove_profile)
-        self.make_active = QPushButton("★ Сделать основным")
+        self.make_active = make_button("Сделать основным", "star")
         self.make_active.clicked.connect(self._make_active)
         row1 = QHBoxLayout()
         row1.addWidget(dup)
@@ -99,7 +97,7 @@ class VoicesPage(QWidget):
         body.addWidget(scroll, 1)
 
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(24, 20, 24, 16)
+        lay.setContentsMargins(28, 24, 28, 12)
         lay.addWidget(
             page_header(
                 "Голоса",
@@ -136,9 +134,7 @@ class VoicesPage(QWidget):
         self.voice = QComboBox()
         self.voice.setMinimumWidth(260)
         self.voice.currentIndexChanged.connect(self._voice_changed)
-        refresh = QToolButton()
-        refresh.setText("⟳")
-        refresh.setToolTip("Обновить список голосов")
+        refresh = icon_button("refresh", "Обновить список голосов")
         refresh.clicked.connect(lambda: self._request_voices(self._profile_engine(), refresh=True))
         voice_row = QHBoxLayout()
         voice_row.addWidget(self.lang)
@@ -148,11 +144,11 @@ class VoicesPage(QWidget):
         self.piper_row = QWidget()
         pr = QHBoxLayout(self.piper_row)
         pr.setContentsMargins(0, 0, 0, 0)
-        dl = QPushButton("⬇ Скачать голоса…")
+        dl = make_button("Скачать голоса…", "download")
         dl.clicked.connect(self._open_piper_download)
-        add_file = QPushButton("Добавить модель .onnx…")
+        add_file = make_button("Своя модель .onnx…", "plus")
         add_file.clicked.connect(self._add_piper_file)
-        folder = QPushButton("Папка")
+        folder = make_button("Папка", "folder")
         folder.clicked.connect(lambda: _open_folder(paths.piper_voices_dir()))
         pr.addWidget(dl)
         pr.addWidget(add_file)
@@ -192,15 +188,17 @@ class VoicesPage(QWidget):
 
     def _build_rvc_group(self) -> QGroupBox:
         box = QGroupBox("Свой голос через RVC (модели из войс-ченджеров)")
-        self.rvc_enabled = QCheckBox("Пропускать озвучку через RVC-модель")
+        self.rvc_enabled = ToggleSwitch()
         self.rvc_enabled.toggled.connect(self._rvc_toggled)
+        rvc_row = QHBoxLayout()
+        rvc_row.setSpacing(10)
+        rvc_row.addWidget(self.rvc_enabled)
+        rvc_row.addWidget(QLabel("Пропускать озвучку через RVC-модель"), 1)
         self.rvc_model = QComboBox()
         self.rvc_model.setEditable(True)
         self.rvc_model.setMinimumWidth(220)
         self.rvc_model.currentTextChanged.connect(lambda t: self._set("rvc_model", t.strip()))
-        rvc_refresh = QToolButton()
-        rvc_refresh.setText("⟳")
-        rvc_refresh.setToolTip("Спросить у RVC-сервера список моделей")
+        rvc_refresh = icon_button("refresh", "Спросить у RVC-сервера список моделей")
         rvc_refresh.clicked.connect(self._refresh_rvc_models)
         model_row = QHBoxLayout()
         model_row.addWidget(self.rvc_model, 1)
@@ -216,7 +214,7 @@ class VoicesPage(QWidget):
         self.rvc_method.currentIndexChanged.connect(lambda _i: self._set("rvc_method", self.rvc_method.currentData()))
         self.rvc_status = QLabel("")
         self.rvc_status.setObjectName("hint")
-        folder = QPushButton("Папка моделей")
+        folder = make_button("Папка моделей", "folder")
         folder.clicked.connect(lambda: _open_folder(paths.rvc_models_dir()))
         status_row = QHBoxLayout()
         status_row.addWidget(self.rvc_status, 1)
@@ -233,7 +231,7 @@ class VoicesPage(QWidget):
         self.rvc_fields = [self.rvc_model, rvc_refresh, self.rvc_pitch, self.rvc_method]
         form = QFormLayout(box)
         form.setSpacing(10)
-        form.addRow(self.rvc_enabled)
+        form.addRow(rvc_row)
         form.addRow("Модель", model_row)
         form.addRow("Сдвиг тона", self.rvc_pitch)
         form.addRow("Метод", self.rvc_method)
@@ -244,11 +242,10 @@ class VoicesPage(QWidget):
     def _build_test_group(self) -> QGroupBox:
         box = QGroupBox("Проверка")
         self.test_text = QLineEdit("Привет! Это мой голос в KMuted.")
-        listen = QPushButton("▶ Прослушать")
+        listen = make_button("Прослушать", "headset")
         listen.setToolTip("Только в наушники — другие не услышат")
         listen.clicked.connect(self._preview)
-        say = QPushButton("🎙 Сказать в микрофон")
-        say.setObjectName("primary")
+        say = make_button("Сказать в микрофон", "mic", "primary")
         say.clicked.connect(self._say)
         row = QHBoxLayout()
         row.addWidget(self.test_text, 1)
@@ -279,7 +276,9 @@ class VoicesPage(QWidget):
             engine = self.controller.speech.engines.get(v.engine)
             star = "★ " if v.id == active else ""
             rvc = " + RVC" if v.rvc_enabled and v.rvc_model else ""
-            item = QListWidgetItem(f"{star}{v.name}\n{engine.title.split(' (')[0] if engine else v.engine}{rvc}")
+            engine_title = engine.title.split(" (")[0] if engine else v.engine
+            color = theme.ACCENT_2 if v.id == active else theme.MUTED
+            item = QListWidgetItem(icon(_ENGINE_ICON.get(v.engine, "voices"), color, 18), f"{star}{v.name}\n{engine_title}{rvc}")
             self.list.addItem(item)
         self.list.blockSignals(False)
         if cfg.voices:

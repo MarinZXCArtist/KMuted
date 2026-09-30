@@ -13,10 +13,12 @@ from __future__ import annotations
 import logging
 import sys
 import threading
+import time
 from typing import Callable, Iterable
 
 from kmuted.hotkeys.keys import (
     MODIFIERS,
+    NAME_TO_VK,
     make_combo,
     name_from_pynput_button,
     name_from_pynput_key,
@@ -25,6 +27,12 @@ from kmuted.hotkeys.keys import (
 log = logging.getLogger(__name__)
 
 _IS_WINDOWS = sys.platform == "win32"
+
+# Keyboard auto-repeat fires every ~30-500 ms. A "repeat" arriving much
+# later means we missed the key-up (UAC prompt, elevated game window...)
+# and this is really a fresh press.
+REPEAT_GAP_S = 1.0
+_MOUSE_VK = {"mouse3": 0x04, "mouse4": 0x05, "mouse5": 0x06}
 
 
 class _WinApi:
@@ -43,6 +51,9 @@ class _WinApi:
         if self._user32.GetCursorPos(self._ctypes.byref(pt)):
             return pt.x, pt.y
         return None
+
+    def is_down(self, vk: int) -> bool:
+        return bool(self._user32.GetAsyncKeyState(vk) & 0x8000)
 
     def modifiers_down(self) -> set[str]:
         state = self._user32.GetAsyncKeyState
@@ -77,6 +88,7 @@ class GlobalHotkeys:
         self._bindings: frozenset[str] = frozenset()
         self._pressed: set[str] = set()
         self._active: dict[str, str] = {}  # main key -> combo it triggered
+        self._last_event: dict[str, float] = {}
         self._ignored_injected: set[str] = set()
         self._track_mouse = False
         self._mouse_delta = [0.0, 0.0]
@@ -148,12 +160,30 @@ class GlobalHotkeys:
 
     # --- event core (also driven directly by tests) ------------------------
 
-    def key_down(self, name: str | None) -> None:
+    def key_is_down(self, name: str) -> bool | None:
+        """Physical key state (Windows only); None when unknown."""
+        if self._win is None:
+            return None
+        vk = _MOUSE_VK.get(name) or NAME_TO_VK.get(name)
+        if vk is None:
+            return None
+        try:
+            return self._win.is_down(vk)
+        except Exception:
+            return None
+
+    def key_down(self, name: str | None, now: float | None = None) -> None:
         if not name:
             return
+        now = time.monotonic() if now is None else now
         with self._lock:
-            if name in self._pressed:  # auto-repeat
-                return
+            last = self._last_event.get(name, 0.0)
+            self._last_event[name] = now
+            if name in self._pressed:
+                stale = name.startswith("mouse") or now - last > REPEAT_GAP_S
+                if not stale:
+                    return  # auto-repeat
+                self._active.pop(name, None)  # missed key-up: start over
             self._pressed.add(name)
             if name in MODIFIERS and not self._bound_as_key(name):
                 return
@@ -169,6 +199,7 @@ class GlobalHotkeys:
             return
         with self._lock:
             self._pressed.discard(name)
+            self._last_event.pop(name, None)
             combo = self._active.pop(name, None)
         if combo:
             self._safe(self._on_release, combo)

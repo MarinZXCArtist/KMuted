@@ -72,3 +72,26 @@ def test_injected_ptt_key_is_ignored():
     hk._kb_press(key, True)
     hk._kb_release(key, True)
     assert events == []
+
+
+def test_missed_key_up_does_not_block_next_press():
+    hk, events = make()
+    hk.set_bindings({"alt+t"})
+    hk.key_down("alt", now=0.0)
+    hk.key_down("t", now=0.0)  # key-up of "t" gets lost (e.g. UAC prompt)
+    hk.key_down("t", now=0.4)  # auto-repeat: ignored
+    hk.key_down("t", now=5.0)  # much later: a real new press
+    assert events == [("down", "alt+t"), ("down", "alt+t")]
+
+
+def test_mouse_buttons_never_count_as_repeat():
+    hk, events = make()
+    hk.set_bindings({"mouse5"})
+    hk.key_down("mouse5", now=0.0)
+    hk.key_down("mouse5", now=0.1)  # previous release was missed
+    assert events == [("down", "mouse5"), ("down", "mouse5")]
+
+
+def test_key_is_down_unknown_without_windows():
+    hk, _ = make()
+    assert hk.key_is_down("q") is None

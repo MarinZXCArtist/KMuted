@@ -4,14 +4,35 @@ from __future__ import annotations
 
 import math
 
-from PySide6.QtCore import QPointF, QRectF, Qt
-from PySide6.QtGui import QColor, QFont, QFontMetrics, QGuiApplication, QCursor, QPainter, QPainterPath, QPen, QRadialGradient
+from PySide6.QtCore import QPointF, QRectF, Qt, QTimer, QVariantAnimation
+from PySide6.QtGui import (
+    QColor,
+    QConicalGradient,
+    QCursor,
+    QFont,
+    QFontMetrics,
+    QGuiApplication,
+    QLinearGradient,
+    QPainter,
+    QPainterPath,
+    QPen,
+    QRadialGradient,
+)
 from PySide6.QtWidgets import QWidget
 
 from kmuted.rawinput import RawMouse
 from kmuted.ui import theme
+from kmuted.ui.icons import load_asset_pixmap
 
 MAX_VECTOR = 160.0  # virtual stick radius (px of mouse travel)
+_ART: dict[str, object] = {}
+
+
+def _wheel_art():
+    """User picture for the wheel hub (``assets/wheel_center.*``), loaded once."""
+    if "hub" not in _ART:
+        _ART["hub"] = load_asset_pixmap("wheel_center")
+    return _ART["hub"]
 
 
 def sector_for_vector(dx: float, dy: float, count: int, deadzone: float) -> int:
@@ -62,6 +83,16 @@ def _elide_lines(text: str, fm: QFontMetrics, width: int, max_lines: int = 2) ->
     return [fm.elidedText(line, Qt.ElideRight, width) for line in lines]
 
 
+def _mix(a: QColor, b: QColor, t: float) -> QColor:
+    t = max(0.0, min(1.0, t))
+    return QColor(
+        round(a.red() + (b.red() - a.red()) * t),
+        round(a.green() + (b.green() - a.green()) * t),
+        round(a.blue() + (b.blue() - a.blue()) * t),
+        round(a.alpha() + (b.alpha() - a.alpha()) * t),
+    )
+
+
 def paint_wheel(
     p: QPainter,
     rect: QRectF,
@@ -70,67 +101,91 @@ def paint_wheel(
     title: str = "",
     center_text: str = "",
     pointer: tuple[float, float] | None = None,
+    highlights: list[float] | None = None,
+    scale: float = 1.0,
 ) -> None:
+    """Draw the wheel. ``highlights`` (0..1 per slot) animate the selection."""
     p.setRenderHint(QPainter.Antialiasing)
+    p.setRenderHint(QPainter.TextAntialiasing)
     n = max(1, len(captions))
+    if highlights is None or len(highlights) != len(captions):
+        highlights = [1.0 if i == selected else 0.0 for i in range(len(captions))]
     size = min(rect.width(), rect.height())
     center = rect.center()
-    r_out = size / 2 - 6
+    if scale != 1.0:
+        p.translate(center)
+        p.scale(scale, scale)
+        p.translate(-center)
+    grow = size * 0.028
+    r_out = size / 2 - grow - 8
     r_in = r_out * 0.38
     step = 360.0 / n
 
-    # backdrop
-    glow = QRadialGradient(center, r_out + 6)
-    glow.setColorAt(0.0, QColor(20, 21, 28, 235))
-    glow.setColorAt(0.93, QColor(20, 21, 28, 230))
+    # backdrop: dark disc with a soft colored rim
+    glow = QRadialGradient(center, r_out + grow + 8)
+    glow.setColorAt(0.0, QColor(16, 17, 24, 238))
+    glow.setColorAt(0.9, QColor(16, 17, 24, 232))
     glow.setColorAt(1.0, QColor(124, 92, 255, 0))
     p.setPen(Qt.NoPen)
     p.setBrush(glow)
-    p.drawEllipse(center, r_out + 6, r_out + 6)
+    p.drawEllipse(center, r_out + grow + 8, r_out + grow + 8)
+    rim = QConicalGradient(center, 90)
+    rim.setColorAt(0.0, QColor(124, 92, 255, 160))
+    rim.setColorAt(0.5, QColor(34, 211, 238, 120))
+    rim.setColorAt(1.0, QColor(124, 92, 255, 160))
+    p.setPen(QPen(rim, 1.6))
+    p.setBrush(Qt.NoBrush)
+    p.drawEllipse(center, r_out + 3, r_out + 3)
 
     label_font = QFont(p.font())
-    label_font.setPointSizeF(max(8.0, size / 42))
+    label_font.setPointSizeF(max(8.0, size / 40))
     label_font.setWeight(QFont.DemiBold)
     fm = QFontMetrics(label_font)
+    base = QColor(40, 44, 60, 228)
+    empty_c = QColor(32, 35, 48, 150)
+    accent = QColor(theme.ACCENT)
 
     for i, caption in enumerate(captions):
-        # our slot i is centered at i*step clockwise from 12 o'clock
+        h = highlights[i]
         qt_center = 90.0 - i * step
-        path = _sector_path(center, r_in, r_out, qt_center - step / 2 + 0.8, step - 1.6)
+        outer = r_out + grow * h
+        path = _sector_path(center, r_in, outer, qt_center - step / 2 + 0.9, step - 1.8)
         empty = not caption
-        if i == selected:
-            fill = QColor(theme.ACCENT)
-            fill.setAlpha(235)
-        elif empty:
-            fill = QColor(40, 43, 58, 150)
+        if empty:
+            p.setBrush(empty_c)
         else:
-            fill = QColor(46, 50, 67, 225)
-        p.setBrush(fill)
-        p.setPen(QPen(QColor(theme.ACCENT_2) if i == selected else QColor(70, 75, 100, 200), 1.4))
+            mid = math.radians(i * step)
+            far = QPointF(center.x() + math.sin(mid) * outer, center.y() - math.cos(mid) * outer)
+            grad = QLinearGradient(center, far)
+            grad.setColorAt(0, _mix(base, QColor(theme.ACCENT_DEEP), h))
+            grad.setColorAt(1, _mix(QColor(48, 53, 72, 232), accent, h))
+            p.setBrush(grad)
+        edge = _mix(QColor(70, 76, 102, 190), QColor(theme.ACCENT_2), h)
+        p.setPen(QPen(edge, 1.2 + 0.8 * h))
         p.drawPath(path)
 
-        # caption
         mid = math.radians(i * step)
-        r_mid = (r_in + r_out) / 2
+        r_mid = (r_in + outer) / 2
         cx = center.x() + math.sin(mid) * r_mid
         cy = center.y() - math.cos(mid) * r_mid
-        text = caption or "—"
         p.setFont(label_font)
-        p.setPen(QColor("white") if i == selected else (QColor(theme.MUTED) if empty else QColor(theme.TEXT)))
+        if empty:
+            p.setPen(QColor(theme.FAINT))
+        else:
+            p.setPen(_mix(QColor(theme.TEXT), QColor("white"), h))
         chord = 2 * r_mid * math.sin(math.radians(min(step, 120) / 2))
-        max_w = int(min(chord * 0.92, (r_out - r_in) * 1.25))
-        lines = _elide_lines(text, fm, max_w)
+        max_w = int(min(chord * 0.9, (outer - r_in) * 1.25))
+        lines = _elide_lines(caption or "—", fm, max_w)
         line_h = fm.height()
         top = cy - line_h * len(lines) / 2
         for k, line in enumerate(lines):
             p.drawText(QRectF(cx - max_w / 2, top + k * line_h, max_w, line_h), Qt.AlignCenter, line)
 
-        # slot number
         num_font = QFont(label_font)
-        num_font.setPointSizeF(label_font.pointSizeF() * 0.7)
+        num_font.setPointSizeF(label_font.pointSizeF() * 0.66)
         p.setFont(num_font)
-        p.setPen(QColor(255, 255, 255, 110))
-        rn = r_out - fm.height() * 0.55
+        p.setPen(QColor(255, 255, 255, 90 + int(100 * h)))
+        rn = outer - fm.height() * 0.5
         p.drawText(
             QRectF(center.x() + math.sin(mid) * rn - 12, center.y() - math.cos(mid) * rn - 9, 24, 18),
             Qt.AlignCenter,
@@ -138,35 +193,58 @@ def paint_wheel(
         )
 
     # hub
-    p.setPen(QPen(QColor(theme.BORDER), 1.5))
-    p.setBrush(QColor(24, 25, 34, 245))
-    p.drawEllipse(center, r_in - 5, r_in - 5)
+    hub_r = r_in - 6
+    hub = QRadialGradient(center, hub_r)
+    hub.setColorAt(0, QColor(30, 32, 44, 250))
+    hub.setColorAt(1, QColor(20, 21, 30, 250))
+    p.setPen(QPen(QColor(theme.BORDER_2), 1.4))
+    p.setBrush(hub)
+    p.drawEllipse(center, hub_r, hub_r)
+    art = _wheel_art() if not center_text else None
+    if art is not None and not art.isNull():
+        side = int(hub_r * 1.3)
+        clip = QPainterPath()
+        clip.addEllipse(center, hub_r - 4, hub_r - 4)
+        p.save()
+        p.setClipPath(clip)
+        scaled = art.scaled(side, side, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
+        p.setOpacity(0.35)
+        p.drawPixmap(int(center.x() - scaled.width() / 2), int(center.y() - scaled.height() / 2), scaled)
+        p.restore()
 
-    hub_w = int((r_in - 12) * 1.7)
+    hub_w = int((hub_r - 8) * 1.7)
     body = QFont(p.font())
-    body.setPointSizeF(max(8.0, size / 48))
+    body.setPointSizeF(max(8.0, size / 46))
     p.setFont(body)
     bfm = QFontMetrics(body)
     if center_text:
-        p.setPen(QColor(theme.TEXT))
+        body.setWeight(QFont.DemiBold)
+        p.setFont(body)
+        bfm = QFontMetrics(body)
+        p.setPen(QColor("white"))
         lines = _elide_lines(center_text, bfm, hub_w, 3)
     else:
         p.setPen(QColor(theme.MUTED))
-        lines = _elide_lines(title, bfm, hub_w, 2) if title else []
+        lines = _elide_lines(title, bfm, hub_w, 3) if title else []
     top = center.y() - bfm.height() * len(lines) / 2
     for k, line in enumerate(lines):
         p.drawText(QRectF(center.x() - hub_w / 2, top + k * bfm.height(), hub_w, bfm.height()), Qt.AlignCenter, line)
 
-    # direction pointer
+    # direction pointer on the hub rim
     if pointer is not None:
         px, py = pointer
         length = math.hypot(px, py)
         if length > 1:
-            reach = min(1.0, length / MAX_VECTOR) * (r_in - 10)
+            reach = min(1.0, length / MAX_VECTOR) * (hub_r - 6)
             tip = QPointF(center.x() + px / length * reach, center.y() + py / length * reach)
+            halo = QRadialGradient(tip, 12)
+            halo.setColorAt(0, QColor(34, 211, 238, 150))
+            halo.setColorAt(1, QColor(34, 211, 238, 0))
             p.setPen(Qt.NoPen)
+            p.setBrush(halo)
+            p.drawEllipse(tip, 12, 12)
             p.setBrush(QColor(theme.ACCENT_2))
-            p.drawEllipse(tip, 5, 5)
+            p.drawEllipse(tip, 4.5, 4.5)
 
 
 class WheelOverlay(QWidget):
@@ -192,26 +270,63 @@ class WheelOverlay(QWidget):
         self.vector = (0.0, 0.0)
         self.selected = -1
         self.raw = RawMouse()
+        self._hl: list[float] = []
+        self._scale = 1.0
+        self._intro = QVariantAnimation(self)
+        self._intro.setDuration(140)
+        self._intro.setStartValue(0.0)
+        self._intro.setEndValue(1.0)
+        self._intro.valueChanged.connect(self._on_intro)
+        self._outro = QVariantAnimation(self)
+        self._outro.setDuration(90)
+        self._outro.setStartValue(1.0)
+        self._outro.setEndValue(0.0)
+        self._outro.valueChanged.connect(lambda v: self.setWindowOpacity(float(v)))
+        self._outro.finished.connect(self.hide)
+        self._ease = QTimer(self)  # runs only while the highlight is moving
+        self._ease.setInterval(16)
+        self._ease.timeout.connect(self._ease_step)
 
     def open(self, title: str, slots, deadzone: float, hint: str = "") -> None:
+        self._outro.stop()
         self.slots = list(slots)
         self.title = title
         self.hint = hint
         self.deadzone = deadzone
         self.vector = (0.0, 0.0)
         self.selected = -1
+        self._hl = [0.0] * len(self.slots)
         screen = QGuiApplication.screenAt(QCursor.pos()) or QGuiApplication.primaryScreen()
         geo = screen.geometry()
-        side = int(min(geo.width(), geo.height()) * 0.5)
-        side = max(360, min(side, 620))
+        side = int(min(geo.width(), geo.height()) * 0.52)
+        side = max(380, min(side, 640))
         self.setGeometry(geo.center().x() - side // 2, geo.center().y() - side // 2, side, side)
+        self.setWindowOpacity(0.0)
+        self._scale = 0.88
         self.show()
         self.raise_()
         self.raw.start(int(self.winId()))
+        self._intro.start()
+
+    def close_animated(self) -> None:
+        if not self.isVisible() or self._outro.state() == QVariantAnimation.Running:
+            return
+        self._intro.stop()
+        self._ease.stop()
+        self.raw.stop()
+        self._outro.start()
+
+    def _on_intro(self, value) -> None:
+        t = float(value)
+        eased = 1 - (1 - t) ** 3
+        self.setWindowOpacity(eased)
+        self._scale = 0.88 + 0.12 * eased
         self.update()
 
     def hideEvent(self, event) -> None:  # noqa: N802
         self.raw.stop()
+        self._ease.stop()
+        self._intro.stop()
         super().hideEvent(event)
 
     def add_delta(self, dx: float, dy: float) -> None:
@@ -224,6 +339,24 @@ class WheelOverlay(QWidget):
             idx = -1  # empty slot = cancel
         if idx != self.selected:
             self.selected = idx
+            if self.isVisible() and not self._ease.isActive():
+                self._ease.start()
+            elif not self.isVisible():  # no animation to watch
+                self._hl = [1.0 if i == idx else 0.0 for i in range(len(self.slots))]
+        self.update()
+
+    def _ease_step(self) -> None:
+        moving = False
+        for i, h in enumerate(self._hl):
+            target = 1.0 if i == self.selected else 0.0
+            nh = h + (target - h) * 0.35
+            if abs(nh - target) < 0.02:
+                nh = target
+            else:
+                moving = True
+            self._hl[i] = nh
+        if not moving:
+            self._ease.stop()
         self.update()
 
     def selected_slot(self):
@@ -245,6 +378,8 @@ class WheelOverlay(QWidget):
             title=hint,
             center_text=center,
             pointer=self.vector,
+            highlights=self._hl,
+            scale=self._scale,
         )
         p.end()
 
