@@ -416,6 +416,17 @@ installer/          Inno Setup installer script (EN/RU)
 
 Every push is built on Windows in GitHub Actions (tests, exe, installer). A `v*` tag
 (e.g. `v0.4.0`) publishes a release with the installer — auto-updates use it.
+
+**Publishing a version (on the GitHub website, no command line):**
+
+1. Make sure the version in `kmuted/__init__.py` is new (e.g. `0.4.0`).
+2. Open **Releases → Draft a new release**.
+3. In **Choose a tag** type `v0.4.0` → **Create new tag: v0.4.0 on publish**; set **Target** to the
+   branch with the code.
+4. Title, e.g. `KMuted 0.4.0`; description — the list from "What's new".
+5. Click **Publish release**. The build takes ~10–15 minutes (**Actions** tab); then
+   `KMuted-Setup-0.4.0.exe` and the portable `KMuted-0.4.0-windows.zip` are attached to the release
+   automatically.
 New UI strings are written in Russian inside `tr("…")`, and the English translation goes into
 `kmuted/i18n_en.py`; `python tools/i18n_strings.py --missing` lists what's missing.
 Documentation: [README.md](README.md) (Russian) and this file — keep them in sync.
