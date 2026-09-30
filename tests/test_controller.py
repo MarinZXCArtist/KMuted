@@ -72,7 +72,7 @@ def test_stop_drops_pending(controller, qapp):
 
 def test_phrase_hotkey_says_phrase(controller, qapp):
     said = []
-    controller.say = lambda text, voice_id="", persist=False: said.append(text)
+    controller.say = lambda text, voice_id="", persist=False, phrase=False: said.append(text)
     phrase = controller.config.phrases[0]
     controller._on_hotkey_down(phrase.hotkey)
     assert said == [phrase.text]
@@ -83,7 +83,7 @@ def test_phrase_hotkey_says_phrase(controller, qapp):
 
 def test_wheel_hold_flow(controller, qapp):
     said = []
-    controller.say = lambda text, voice_id="", persist=False: said.append(text)
+    controller.say = lambda text, voice_id="", persist=False, phrase=False: said.append(text)
     wheel = controller.config.wheels[0]
     controller._on_hotkey_down(wheel.hotkey)
     assert controller.wheel_overlay.isVisible()
@@ -100,7 +100,7 @@ def test_wheel_hold_flow(controller, qapp):
 
 def test_wheel_toggle_flow(controller, qapp):
     said = []
-    controller.say = lambda text, voice_id="", persist=False: said.append(text)
+    controller.say = lambda text, voice_id="", persist=False, phrase=False: said.append(text)
     controller.config.general.wheel_mode = cfgmod.WHEEL_TOGGLE
     wheel = controller.config.wheels[0]
     controller._on_hotkey_down(wheel.hotkey)
@@ -129,7 +129,7 @@ def test_conflicts_and_cycle_voice(controller):
 
 def test_repeat_last_and_variables(controller, qapp):
     said = []
-    controller._enqueue = lambda text, voice_id, profile, persist, monitor_only: said.append((text, persist))
+    controller._enqueue = lambda text, voice_id, profile, persist, monitor_only, target="": said.append((text, persist))
     controller.repeat_last()  # nothing yet: just a notice
     controller.say("Сейчас {время}", persist=True)
     assert said[0][0].startswith("Сейчас ") and "{" not in said[0][0]

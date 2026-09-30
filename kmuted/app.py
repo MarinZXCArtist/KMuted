@@ -119,6 +119,20 @@ def build_tray(app: QApplication, window, controller) -> QSystemTrayIcon | None:
     mute.setChecked(controller.config.audio.mic_muted)
     mute.toggled.connect(lambda on: on != controller.config.audio.mic_muted and controller.toggle_mute())
     controller.config_changed.connect(lambda _s: mute.setChecked(controller.config.audio.mic_muted))
+    translate = QAction(tr("Переводить перед озвучкой"), menu)
+    translate.setCheckable(True)
+
+    def sync_translate(*_args) -> None:
+        translate.blockSignals(True)
+        translate.setChecked(bool(controller.translation_target()))
+        label = controller.translation_label()
+        translate.setText(tr("Переводить перед озвучкой") + (f"  ({label})" if label else ""))
+        translate.blockSignals(False)
+
+    translate.toggled.connect(lambda on: on != bool(controller.translation_target()) and controller.toggle_translation())
+    controller.config_changed.connect(sync_translate)
+    controller.profile_changed.connect(sync_translate)
+    sync_translate()
     stop = QAction(tr("Остановить всё"), menu)
     stop.triggered.connect(controller.stop)
     quit_action = QAction(tr("Выход"), menu)
@@ -128,7 +142,7 @@ def build_tray(app: QApplication, window, controller) -> QSystemTrayIcon | None:
         app.quit()
 
     quit_action.triggered.connect(quit_app)
-    for action in (show, write, repeat, hotkeys, mute, stop):
+    for action in (show, write, repeat, hotkeys, mute, translate, stop):
         menu.addAction(action)
     menu.addSeparator()
     menu.addAction(quit_action)

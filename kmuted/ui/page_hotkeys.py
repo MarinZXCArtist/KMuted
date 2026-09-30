@@ -12,7 +12,7 @@ from kmuted.ui.components import SectionTitle, SettingRow, ToggleSwitch, page_he
 from kmuted.ui.icons import icon
 from kmuted.ui.widgets import HotkeyEdit
 
-_GROUP_ORDER = ["Речь", "Звуки", "Голоса", "Звук", "Приложение"]
+_GROUP_ORDER = ["Речь", "Перевод", "Звуки", "Голоса", "Профили", "Звук", "Приложение"]
 
 
 class HotkeysPage(QWidget):
@@ -59,7 +59,7 @@ class HotkeysPage(QWidget):
         self.rebuild()
 
     def _on_config_changed(self, section: str) -> None:
-        if section in ("phrases", "wheels", "sounds", "voices"):
+        if section in ("phrases", "wheels", "sounds", "voices", "profiles"):
             self._rebuild_timer.start()  # items added / removed / renamed on other pages
         elif section == "general":
             self._update_conflicts()
@@ -118,20 +118,24 @@ class HotkeysPage(QWidget):
         if c.config.wheels:
             self._section(tr("Колёса"))
             for wheel in c.config.wheels:
-                self._add_row(wheel.name, tr("Зажать — выбрать мышью — отпустить"), "wheel", wheel.hotkey, f"wheel:{wheel.id}",
+                self._add_row(wheel.name, self._scoped(tr("Зажать — выбрать мышью — отпустить"), wheel), "wheel", wheel.hotkey, f"wheel:{wheel.id}",
                               lambda v, x=wheel: self._set_item(x, "wheels", v))
         if c.config.phrases:
             self._section(tr("Фразы"))
             for phrase in c.config.phrases:
-                self._add_row(_short(phrase.text), tr("Сказать фразу"), "phrases", phrase.hotkey, f"phrase:{phrase.id}",
+                self._add_row(_short(phrase.text), self._scoped(tr("Сказать фразу"), phrase), "phrases", phrase.hotkey, f"phrase:{phrase.id}",
                               lambda v, x=phrase: self._set_item(x, "phrases", v))
         if c.config.sounds:
             self._section(tr("Звуки"))
             for sound in c.config.sounds:
-                self._add_row(sound.name, tr("Проиграть звук"), "volume", sound.hotkey, f"sound:{sound.id}",
+                self._add_row(sound.name, self._scoped(tr("Проиграть звук"), sound), "volume", sound.hotkey, f"sound:{sound.id}",
                               lambda v, x=sound: self._set_item(x, "sounds", v))
         self._update_conflicts()
         self._filter(self.search.text())
+
+    def _scoped(self, text: str, item) -> str:
+        names = [p.name for p in self.controller.config.profiles if p.id in item.profiles]
+        return text + ("  ·  🎮 " + ", ".join(names) if names else "")
 
     def _section(self, title: str) -> None:
         label = SectionTitle(title)
@@ -161,12 +165,11 @@ class HotkeysPage(QWidget):
         self._update_conflicts()
 
     def _update_conflicts(self) -> None:
-        owners = self.controller.hotkey_owners()
         for row, owner, base, _text in self._rows:
             if not owner or not isinstance(row, SettingRow):
                 continue
             combo = row.control.combo() if isinstance(row.control, HotkeyEdit) else ""
-            others = [name for key, name in owners.get(combo, []) if key != owner] if combo else []
+            others = self.controller.hotkey_clashes(combo, owner)
             if others:
                 row.subtitle.setText(f"<span style='color:{theme.WARNING}'>⚠ {tr('Уже занято')}: {', '.join(others)}</span>")
             else:

@@ -38,6 +38,19 @@ def tr(source: str, /, **kwargs) -> str:
     return text.format(**kwargs) if kwargs else text
 
 
+def plural(n: int, one: str, few: str, many: str) -> str:
+    """"1 фраза", "3 фразы", "5 фраз" (Russian forms are the source; see tr)."""
+    if _current == "en":
+        return f"{n} {tr(one) if n == 1 else tr(many)}"
+    if n % 10 == 1 and n % 100 != 11:
+        form = one
+    elif 2 <= n % 10 <= 4 and not 12 <= n % 100 <= 14:
+        form = few
+    else:
+        form = many
+    return f"{n} {form}"
+
+
 def installer_choice() -> str:
     """Language picked in the installer (written next to the settings)."""
     hint = paths.data_dir() / "language.txt"

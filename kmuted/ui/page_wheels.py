@@ -25,6 +25,7 @@ from kmuted.hotkeys.keys import format_combo
 from kmuted.ui import theme
 from kmuted.ui.icons import icon
 from kmuted.ui.overlay_wheel import WheelPreview
+from kmuted.ui.profile_widgets import ProfileScopeButton
 from kmuted.ui.components import make_button
 from kmuted.ui.widgets import HotkeyEdit, fill_voice_combo, page_header
 from kmuted.i18n import tr
@@ -61,6 +62,8 @@ class WheelsPage(QWidget):
         self.count = QSpinBox()
         self.count.setRange(WHEEL_MIN_SLOTS, WHEEL_MAX_SLOTS)
         self.count.valueChanged.connect(self._count_changed)
+        self.scope = ProfileScopeButton(controller, [])
+        self.scope.changed.connect(self._scope_changed)
         self.warning = QLabel()
         self.warning.setStyleSheet(f"color: {theme.WARNING};")
         self.warning.hide()
@@ -70,6 +73,7 @@ class WheelsPage(QWidget):
         form.addRow(tr("Название"), self.name)
         form.addRow(tr("Горячая клавиша"), self.hotkey)
         form.addRow(tr("Секторов"), self.count)
+        form.addRow(tr("Где работает"), self.scope)
 
         self.table = QTableWidget(0, 3)
         self.table.setHorizontalHeaderLabels(["", tr("Надпись"), tr("Что сказать")])
@@ -158,6 +162,8 @@ class WheelsPage(QWidget):
     def _on_config_changed(self, section: str) -> None:
         if section == "voices":
             self._load_wheel(self.list.currentRow())
+        elif section == "profiles":
+            self.refresh_list()
 
     def refresh_list(self, select: int | None = None) -> None:
         wheels = self.controller.config.wheels
@@ -166,7 +172,9 @@ class WheelsPage(QWidget):
         self.list.clear()
         for w in wheels:
             key = format_combo(w.hotkey)
-            item = QListWidgetItem(icon("wheel", theme.ACCENT, 18), f"{w.name}\n{key or tr('без клавиши')}")
+            games = [p.name for p in self.controller.config.profiles if p.id in w.profiles]
+            where = f"  ·  🎮 {', '.join(games)}" if games else ""
+            item = QListWidgetItem(icon("wheel", theme.ACCENT, 18), f"{w.name}\n{key or tr('без клавиши')}{where}")
             self.list.addItem(item)
         self.list.blockSignals(False)
         if wheels:
@@ -185,6 +193,7 @@ class WheelsPage(QWidget):
         self.name.setText(wheel.name)
         self.hotkey.set_combo(wheel.hotkey)
         self.count.setValue(len(wheel.slots))
+        self.scope.set_selected(wheel.profiles)
         self._fill_table(wheel)
         self._loading = False
         self._check_conflict()
@@ -252,6 +261,14 @@ class WheelsPage(QWidget):
             wheel.name = name
             self._changed()
             self.refresh_list()
+
+    def _scope_changed(self) -> None:
+        wheel = self._wheel()
+        if wheel is None or self._loading:
+            return
+        wheel.profiles = self.scope.profiles()
+        self._changed()
+        self._check_conflict()
 
     def _hotkey_changed(self, combo: str) -> None:
         wheel = self._wheel()

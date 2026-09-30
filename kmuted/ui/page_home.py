@@ -226,10 +226,10 @@ class HomePage(QWidget):
         self.keys_switch.toggled.connect(self._toggle_hotkeys)
         self.tile_keys.side.addWidget(self.keys_switch, 0, Qt.AlignVCenter)
         voice_btn = icon_button("edit", tr("Выбрать голос"))
-        voice_btn.clicked.connect(lambda: self.navigate.emit(4))
+        voice_btn.clicked.connect(lambda: self.navigate.emit(_page_index("voices")))
         self.tile_voice.side.addWidget(voice_btn, 0, Qt.AlignVCenter)
         mic_btn = icon_button("settings", tr("Настроить звук"))
-        mic_btn.clicked.connect(lambda: self.navigate.emit(5))
+        mic_btn.clicked.connect(lambda: self.navigate.emit(_page_index("audio")))
         self.tile_mic.side.addWidget(mic_btn, 0, Qt.AlignVCenter)
         for i, tile in enumerate((self.tile_mic, self.tile_voice, self.tile_keys)):
             grid.addWidget(tile, 0, i)
@@ -497,3 +497,9 @@ def _clear_layout(layout) -> None:
             widget.deleteLater()
         elif item.layout() is not None:
             _clear_layout(item.layout())
+
+
+def _page_index(icon_name: str) -> int:
+    from kmuted.ui.main_window import PAGES  # imported late: main_window imports this module
+
+    return next(i for i, (name, _title, _cls) in enumerate(PAGES) if name == icon_name)

@@ -15,6 +15,9 @@ from kmuted.i18n import tr
 MAX_CHARS = 500
 MARGIN = 26  # room for the painted shadow
 RADIUS = 18
+BASE_HEIGHT = 214
+PREVIEW_HEIGHT = 36
+PREVIEW_DELAY_MS = 550
 
 def _qss() -> str:
     return f"""
@@ -24,6 +27,16 @@ QLabel#ovVoice {{
     background: {theme.rgba(theme.ACCENT, 0.18)};
     border: 1px solid {theme.rgba(theme.ACCENT, 0.55)};
     border-radius: 11px; padding: 3px 11px; color: {theme.TEXT}; font-weight: 600;
+}}
+QLabel#ovLang {{
+    background: {theme.rgba(theme.BLUE, 0.16)};
+    border: 1px solid {theme.rgba(theme.BLUE, 0.55)};
+    border-radius: 11px; padding: 3px 11px; color: {theme.TEXT}; font-weight: 700;
+}}
+QLabel#ovPreview {{
+    background: {theme.rgba(theme.BLUE, 0.07)};
+    border: 1px dashed {theme.rgba(theme.BLUE, 0.35)};
+    border-radius: 10px; padding: 6px 12px; color: {theme.TEXT}; font-size: 11pt;
 }}
 QLabel#ovHint {{ color: {theme.MUTED}; font-size: 9pt; }}
 QLabel#ovSent {{ color: {theme.SUCCESS}; font-size: 9pt; font-weight: 700; }}
@@ -43,6 +56,9 @@ QLineEdit#ovEdit:focus {{ border: 1px solid {theme.rgba(theme.ACCENT_2, 0.8)}; }
 class InputOverlay(QWidget):
     submitted = Signal(str, bool)  # text, keep_open
     cycle_voice = Signal(int)
+    cycle_language = Signal(int)
+    toggle_translation = Signal()
+    text_idle = Signal(str)  # typing paused: time to show a translation
     closed = Signal()
 
     def __init__(self) -> None:
@@ -62,6 +78,8 @@ class InputOverlay(QWidget):
         self._angle = 0.0
         self._flash = 0.0
         self._target = QPoint()
+        self._translation = ""  # chip text, "" = translation off
+        self._preview_on = False
 
         logo = QLabel()
         logo.setPixmap(render_logo(24))
@@ -70,6 +88,10 @@ class InputOverlay(QWidget):
         self.voice_label = QLabel()
         self.voice_label.setObjectName("ovVoice")
         self.voice_label.setToolTip(tr("Tab — сменить голос"))
+        self.lang_label = QLabel()
+        self.lang_label.setObjectName("ovLang")
+        self.lang_label.setToolTip(tr("Ctrl+L — сменить язык перевода · Ctrl+T — перевод вкл/выкл"))
+        self.lang_label.hide()
         esc = Keycaps("esc")
         esc.setToolTip(tr("Закрыть"))
         header = QHBoxLayout()
@@ -77,6 +99,7 @@ class InputOverlay(QWidget):
         header.addWidget(logo)
         header.addWidget(title)
         header.addStretch(1)
+        header.addWidget(self.lang_label)
         header.addWidget(self.voice_label)
         header.addWidget(esc)
 
@@ -86,6 +109,14 @@ class InputOverlay(QWidget):
         self.edit.setPlaceholderText(tr("Напишите, что сказать…"))
         self.edit.installEventFilter(self)
         self.edit.textChanged.connect(self._update_counter)
+        self.edit.textChanged.connect(self._on_text_changed)
+
+        self.preview = QLabel()
+        self.preview.setObjectName("ovPreview")
+        self.preview.setFixedHeight(PREVIEW_HEIGHT)
+        self.preview.hide()
+        self._preview_text = ""
+        self._preview_failed = False
 
         self.hint = QLabel()
         self.hint.setObjectName("ovHint")
@@ -105,11 +136,12 @@ class InputOverlay(QWidget):
         inner.setSpacing(12)
         inner.addLayout(header)
         inner.addWidget(self.edit)
+        inner.addWidget(self.preview)
         inner.addLayout(footer)
         outer = QVBoxLayout(self)
         outer.setContentsMargins(MARGIN, MARGIN, MARGIN, MARGIN)
         outer.addLayout(inner)
-        self.resize(820, 214)
+        self.resize(820, BASE_HEIGHT)
         self._update_hint()
         self._update_counter()
 
@@ -132,6 +164,10 @@ class InputOverlay(QWidget):
         self._sent_timer = QTimer(self)
         self._sent_timer.setSingleShot(True)
         self._sent_timer.timeout.connect(self.sent.hide)
+        self._idle_timer = QTimer(self)
+        self._idle_timer.setSingleShot(True)
+        self._idle_timer.setInterval(PREVIEW_DELAY_MS)
+        self._idle_timer.timeout.connect(self._emit_idle)
 
     # --- public ------------------------------------------------------------
 
@@ -149,6 +185,8 @@ class InputOverlay(QWidget):
         self._update_hint()
         self.edit.clear()
         self.sent.hide()
+        self._set_preview("", False)
+        self.resize(820, BASE_HEIGHT + (PREVIEW_HEIGHT + 12 if self._previewing() else 0))
 
         screen = QGuiApplication.screenAt(QCursor.pos()) or QGuiApplication.primaryScreen()
         geo = screen.availableGeometry()
@@ -172,6 +210,36 @@ class InputOverlay(QWidget):
     def set_voice_name(self, name: str) -> None:
         self.voice_label.setText(name)
 
+    def set_translation(self, label: str, preview: bool) -> None:
+        """``label`` like "RU → EN" ("" = translation off); ``preview`` — live translation line."""
+        changed = (label, preview) != (self._translation, self._preview_on)
+        self._translation = label
+        self._preview_on = preview
+        self.lang_label.setText("🌐 " + label if label else "")
+        self.lang_label.setVisible(bool(label))
+        self.preview.setVisible(self._previewing())
+        if changed and self.isVisible():
+            self.resize(self.width(), BASE_HEIGHT + (PREVIEW_HEIGHT + 12 if self._previewing() else 0))
+            self._set_preview("", False)
+            if self.edit.text().strip():
+                self._idle_timer.start(0)
+        self._update_hint()
+
+    def show_preview(self, text: str, failed: bool, typed: str | None = None) -> None:
+        """Translation of what is typed (ignored if the text changed meanwhile)."""
+        if typed is not None and typed.strip() != self.edit.text().strip():
+            return
+        self._set_preview(text, failed)
+
+    def show_sent(self, text: str) -> None:
+        """After a translated phrase was said: show what the others heard."""
+        shown = self.sent.fontMetrics().elidedText("✓ " + text, Qt.ElideRight, 360)
+        self.sent.setText(shown)
+        self.sent.setToolTip(text)
+        if self.isVisible():
+            self.sent.show()
+            self._sent_timer.start(2500)
+
     def close_overlay(self, restore: bool = True) -> None:
         if not self.isVisible() or self._vanish.state() == QVariantAnimation.Running:
             return
@@ -183,6 +251,7 @@ class InputOverlay(QWidget):
     # --- internals ---------------------------------------------------------
 
     def _finish_close(self) -> None:
+        self._idle_timer.stop()
         self.hide()
         self._spin.stop()
         self.setWindowOpacity(1.0)
@@ -211,7 +280,48 @@ class InputOverlay(QWidget):
 
     def _update_hint(self) -> None:
         enter = tr("Enter — сказать") + ("" if self.keep_open else tr(" и закрыть"))
-        self.hint.setText(enter + tr("  ·  Shift+Enter — сказать и писать дальше  ·  ↑↓ история  ·  Tab — голос"))
+        if self._translation:
+            self.hint.setText(enter + tr("  ·  ↑↓ история  ·  Tab — голос  ·  Ctrl+L — язык  ·  =текст — без перевода"))
+        else:
+            self.hint.setText(enter + tr("  ·  Shift+Enter — сказать и писать дальше  ·  ↑↓ история  ·  Tab — голос"))
+
+    def _previewing(self) -> bool:
+        return bool(self._translation) and self._preview_on
+
+    def _set_preview(self, text: str, failed: bool) -> None:
+        self._preview_text = text
+        self._preview_failed = failed
+        self._render_preview(stale=False)
+
+    def _render_preview(self, stale: bool) -> None:
+        if not self._previewing():
+            return
+        text = self._preview_text
+        if not text:
+            color, text = theme.FAINT, tr("Перевод появится здесь, пока вы пишете…")
+        elif self._preview_failed:
+            color = theme.WARNING
+        else:
+            color = theme.MUTED if stale else theme.TEXT
+        width = max(100, self.preview.width() - 30)
+        self.preview.setText(self.preview.fontMetrics().elidedText(text, Qt.ElideRight, width))
+        self.preview.setToolTip(self._preview_text)
+        self.preview.setStyleSheet(f"color: {color};")
+
+    def _on_text_changed(self, text: str) -> None:
+        if not self._previewing():
+            return
+        if text.strip():
+            self._render_preview(stale=True)
+            self._idle_timer.start(PREVIEW_DELAY_MS)
+        else:
+            self._idle_timer.stop()
+            self._set_preview("", False)
+
+    def _emit_idle(self) -> None:
+        text = self.edit.text().strip()
+        if text and self.isVisible():
+            self.text_idle.emit(text)
 
     def _update_counter(self) -> None:
         n = len(self.edit.text())
@@ -226,6 +336,8 @@ class InputOverlay(QWidget):
             self._history.insert(0, text)
             self._flash = 1.0
             if keep_open:
+                self.sent.setText(tr("✓ Отправлено"))
+                self.sent.setToolTip("")
                 self.sent.show()
                 self._sent_timer.start(1200)
         self._history_pos = -1
@@ -293,6 +405,12 @@ class InputOverlay(QWidget):
                 return True
             if key == Qt.Key_Backtab:
                 self.cycle_voice.emit(-1)
+                return True
+            if mods & Qt.ControlModifier and key == Qt.Key_L:
+                self.cycle_language.emit(-1 if mods & Qt.ShiftModifier else +1)
+                return True
+            if mods & Qt.ControlModifier and key == Qt.Key_T:
+                self.toggle_translation.emit()
                 return True
         return super().eventFilter(obj, event)
 

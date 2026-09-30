@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -12,13 +13,14 @@ from PySide6.QtGui import QCursor, QGuiApplication
 from PySide6.QtWidgets import QAbstractSpinBox, QApplication, QLineEdit, QPlainTextEdit, QTextEdit
 
 from kmuted import config as cfgmod
-from kmuted import textvars
+from kmuted import processes, textvars
+from kmuted import translate as tl
 from kmuted.actions import ACTION_KEYS, ACTIONS, attr
 from kmuted.audio import devices
 from kmuted.audio.dsp import Clip
 from kmuted.audio.engine import AudioEngine
 from kmuted.audio.sounds import SoundError, SoundLibrary
-from kmuted.config import Config, VoiceProfile
+from kmuted.config import Config, GameProfile, VoiceProfile
 from kmuted.hotkeys.keys import format_combo, parse_combo
 from kmuted.hotkeys.listener import GlobalHotkeys
 from kmuted.hotkeys.ptt import PushToTalk
@@ -33,6 +35,7 @@ log = logging.getLogger(__name__)
 
 STALE_REQUEST_S = 30.0
 WHEEL_TOGGLE_TIMEOUT_MS = 15000
+PROFILE_POLL_MS = 2500
 
 
 @dataclass
@@ -43,6 +46,8 @@ class _Request:
     started: float
     clip: Clip | None = None
     done: bool = False
+    translated: str = ""  # set by the worker when the text was translated
+    translate_error: str = ""
 
 
 class Controller(QObject):
@@ -57,6 +62,7 @@ class Controller(QObject):
     sounds_changed = Signal()  # a sound started/stopped (for the soundboard tiles)
     toggle_window_requested = Signal()
     restart_requested = Signal()  # language or accent changed
+    profile_changed = Signal(str)  # active game profile id ("" = none)
 
     # internal cross-thread plumbing
     _hotkey_down = Signal(str)
@@ -64,11 +70,13 @@ class Controller(QObject):
     _synth_done = Signal(int, object)
     _sound_ready = Signal(str, object, bool)
     _mic_state = Signal(bool)
+    _preview_done = Signal(str, object)
 
     def __init__(self, config: Config, *, enable_hotkeys: bool = True, enable_audio: bool = True) -> None:
         super().__init__()
         self.config = config
         self.speech = SpeechService(config.general.rvc_server_url, cloud=config.cloud)
+        self.translator = tl.Translator(config.translate, config.cloud)
         self.sounds = SoundLibrary()
         self._sound_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="sfx")
         self.audio = AudioEngine(on_mic_start=lambda: self._mic_state.emit(True), on_mic_idle=lambda: self._mic_state.emit(False))
@@ -88,15 +96,21 @@ class Controller(QObject):
         self._wheel_released_ticks = 0
         self._last_cursor = None
         self.last_spoken: tuple[str, str] | None = None  # (text as typed, voice id)
+        self._last_phrase = False
+        self.active_profile_id = ""
 
         self._hotkey_down.connect(self._on_hotkey_down, Qt.QueuedConnection)
         self._hotkey_up.connect(self._on_hotkey_up, Qt.QueuedConnection)
         self._synth_done.connect(self._on_synth_done, Qt.QueuedConnection)
         self._sound_ready.connect(self._on_sound_ready, Qt.QueuedConnection)
         self._mic_state.connect(self._on_mic_state, Qt.QueuedConnection)
+        self._preview_done.connect(self._on_preview_done, Qt.QueuedConnection)
 
         self.input_overlay.submitted.connect(self._on_input_submitted)
         self.input_overlay.cycle_voice.connect(self._on_overlay_cycle_voice)
+        self.input_overlay.text_idle.connect(self._on_overlay_text_idle)
+        self.input_overlay.cycle_language.connect(lambda step: self.cycle_language(step))
+        self.input_overlay.toggle_translation.connect(self.toggle_translation)
 
         self._save_timer = self._single_shot(400, self.save_now)
         self._prewarm_timer = self._single_shot(1200, self.prewarm)
@@ -109,6 +123,17 @@ class Controller(QObject):
         self._sounds_poll.setInterval(150)
         self._sounds_poll.timeout.connect(self._poll_sounds)
         self._playing_sounds: set[str] = set()
+        self._profile_timer = QTimer(self)  # runs only while some profile waits for its game
+        self._profile_timer.setInterval(PROFILE_POLL_MS)
+        self._profile_timer.timeout.connect(self._poll_profiles)
+        self._translator_save = self._single_shot(5000, self.translator.save)
+
+        # a profile's voice from the last session: go back to the user's own
+        g = config.general
+        if g.voice_before_profile:
+            if config.voice_by_id(g.voice_before_profile):
+                g.active_voice_id = g.voice_before_profile
+            g.voice_before_profile = ""
 
         self.apply_general()
         if enable_audio:
@@ -116,6 +141,7 @@ class Controller(QObject):
         if enable_hotkeys:
             self.hotkeys.start()
         self.rebind_hotkeys()
+        self.update_profile_watch()
         self._prewarm_timer.start()
 
     def _single_shot(self, ms: int, slot) -> QTimer:
@@ -130,7 +156,7 @@ class Controller(QObject):
     def edited(self, section: str) -> None:
         """Pages call this after changing ``self.config``."""
         self._save_timer.start()
-        if section in ("phrases", "wheels", "general", "sounds", "voices"):
+        if section in ("phrases", "wheels", "general", "sounds", "voices", "profiles"):
             self.rebind_hotkeys()
         if section == "audio":
             self.apply_audio()
@@ -138,7 +164,13 @@ class Controller(QObject):
             self.apply_general()
         if section == "cloud":
             self.speech.set_cloud(self.config.cloud)
-        if section in ("phrases", "wheels", "voices", "general", "cloud"):
+        if section in ("cloud", "translate"):
+            self.translator.configure(self.config.translate, self.config.cloud)
+        if section in ("profiles", "general"):
+            self.update_profile_watch()
+        if section in ("translate", "profiles", "general"):
+            self._update_overlay_translation()
+        if section in ("phrases", "wheels", "voices", "general", "cloud", "translate", "profiles"):
             self._prewarm_timer.start()
         self.config_changed.emit(section)
 
@@ -218,33 +250,51 @@ class Controller(QObject):
 
     # --- speaking -------------------------------------------------------------
 
-    def say(self, text: str, voice_id: str = "", persist: bool = False) -> None:
-        """Synthesize and play through the virtual mic (and headphones)."""
+    def say(self, text: str, voice_id: str = "", persist: bool = False, phrase: bool = False) -> None:
+        """Synthesize and play through the virtual mic (and headphones).
+
+        ``phrase``: a quick phrase or a wheel slot (translated only when the
+        user wants phrases translated too).
+        """
         raw = text.strip()
         if not raw:
             return
+        spoken = self._expand(raw)
+        target = ""
+        if spoken.startswith(tl.SKIP_PREFIX):
+            spoken = spoken[len(tl.SKIP_PREFIX):].strip()  # "=gg" — say it as typed
+        else:
+            target = self.translation_target(phrase)
+        if not spoken:
+            return
+        self.last_spoken = (raw, voice_id)
+        self._last_phrase = phrase
+        profile = self.config.resolve_voice(voice_id)
+        if self.config.audio.playback_mode == cfgmod.PLAYBACK_INTERRUPT:
+            self._drop_pending()
+            self.audio.stop_speech()
+        persist = persist and not textvars.has_vars(raw)
+        if target:
+            self._enqueue(spoken, voice_id, profile, persist, monitor_only=False, target=target)
+        else:
+            self._enqueue(spoken, voice_id, profile, persist, monitor_only=False)
+
+    @staticmethod
+    def _expand(raw: str) -> str:
         clipboard = ""
         if "{" in raw:
             try:
                 clipboard = QGuiApplication.clipboard().text()
             except Exception:
                 clipboard = ""
-        spoken = textvars.expand(raw, clipboard=clipboard).strip()
-        if not spoken:
-            return
-        self.last_spoken = (raw, voice_id)
-        profile = self.config.resolve_voice(voice_id)
-        if self.config.audio.playback_mode == cfgmod.PLAYBACK_INTERRUPT:
-            self._drop_pending()
-            self.audio.stop_speech()
-        self._enqueue(spoken, voice_id, profile, persist and not textvars.has_vars(raw), monitor_only=False)
+        return textvars.expand(raw, clipboard=clipboard).strip()
 
     def repeat_last(self) -> None:
         if self.last_spoken is None:
             self.notify.emit(tr("Ещё нечего повторять"), "info")
             return
         text, voice_id = self.last_spoken
-        self.say(text, voice_id)
+        self.say(text, voice_id, phrase=self._last_phrase)
 
     def preview(self, text: str, profile: VoiceProfile) -> None:
         """Play only in the headphones (voice editor test)."""
@@ -259,14 +309,39 @@ class Controller(QObject):
         self._poll_sounds()
         self.status.emit(tr("Остановлено"))
 
-    def _enqueue(self, text: str, voice_id: str, profile: VoiceProfile, persist: bool, monitor_only: bool) -> None:
+    def _enqueue(
+        self, text: str, voice_id: str, profile: VoiceProfile, persist: bool, monitor_only: bool, target: str = ""
+    ) -> None:
         self._skip_stale()
         self._seq += 1
         seq = self._seq
-        self._requests[seq] = _Request(text, voice_id, monitor_only, time.monotonic())
-        future = self.speech.submit(text, profile, persist=persist)
+        req = _Request(text, voice_id, monitor_only, time.monotonic())
+        self._requests[seq] = req
+        if target:
+            job = self.translator.job(text, target)
+            voiced = self.voice_for_language(target, profile)
+            future = self.speech.submit_call(
+                self._translate_and_speak, req, job, dataclasses.replace(profile), dataclasses.replace(voiced), persist
+            )
+            self.status.emit(tr("Перевод: «{text}»…", text=_short(text)))
+        else:
+            future = self.speech.submit(text, profile, persist=persist)
+            self.status.emit(tr("Синтез: «{text}»…", text=_short(text)))
         future.add_done_callback(lambda f, seq=seq: self._synth_done.emit(seq, f))
-        self.status.emit(tr("Синтез: «{text}»…", text=_short(text)))
+
+    def _translate_and_speak(self, req: _Request, job: tl.Job, base: VoiceProfile, voiced: VoiceProfile, persist: bool) -> Clip:
+        """Worker thread: translate, then synthesize with a voice for that language.
+
+        If translation fails the original text is spoken (better than silence)
+        and the UI shows why.
+        """
+        try:
+            text = self.translator.run(job)
+        except tl.TranslateError as exc:
+            req.translate_error = str(exc)
+            return self.speech.synthesize(req.text, base, persist)
+        req.translated = text
+        return self.speech.synthesize(text, voiced, persist)
 
     def _drop_pending(self) -> None:
         self._requests.clear()
@@ -295,6 +370,13 @@ class Controller(QObject):
         except Exception as exc:
             log.exception("synthesis failed")
             self.error.emit(tr("Ошибка синтеза: {error}", error=exc))
+        if req.translate_error:
+            self.notify.emit(tr("Перевод не удался, сказано как есть: {error}", error=req.translate_error), "warning")
+        elif req.translated:
+            req.text = req.translated
+            self._translator_save.start()
+            if self.input_overlay.isVisible():
+                self.input_overlay.show_sent(req.translated)
         # play in request order, even if a later phrase finished first
         while self._next_play in self._requests and self._requests[self._next_play].done:
             ready = self._requests.pop(self._next_play)
@@ -419,32 +501,59 @@ class Controller(QObject):
 
     # --- hotkeys --------------------------------------------------------------
 
+    def _hotkey_entries(self) -> list[tuple[str, str, str, tuple | None]]:
+        """(combo, owner key, human name, scope) for every binding.
+
+        Scope: ``None`` — always active (actions, voices); ``()`` — a phrase,
+        wheel or sound that works everywhere; ``(ids…)`` — only in these games.
+        """
+        g = self.config.general
+        out: list[tuple[str, str, str, tuple | None]] = []
+        for action in ACTIONS:
+            out.append((getattr(g, attr(action.key)), f"general:{attr(action.key)}", tr(action.title), None))
+        for w in self.config.wheels:
+            out.append((w.hotkey, f"wheel:{w.id}", tr("Колесо «{name}»", name=w.name), tuple(w.profiles)))
+        for p in self.config.phrases:
+            out.append((p.hotkey, f"phrase:{p.id}", tr("Фраза «{text}»", text=_short(p.text, 24)), tuple(p.profiles)))
+        for snd in self.config.sounds:
+            out.append((snd.hotkey, f"sound:{snd.id}", tr("Звук «{name}»", name=snd.name), tuple(snd.profiles)))
+        for v in self.config.voices:
+            out.append((v.hotkey, f"voice:{v.id}", tr("Голос «{name}»", name=v.name), None))
+        return [entry for entry in out if entry[0]]
+
     def hotkey_owners(self) -> dict[str, list[tuple[str, str]]]:
         """combo -> [(owner key, human name)] for everything bound to it."""
-        g = self.config.general
         owners: dict[str, list[tuple[str, str]]] = {}
-
-        def add(combo: str, key: str, name: str) -> None:
-            if combo:
-                owners.setdefault(combo, []).append((key, name))
-
-        for action in ACTIONS:
-            add(getattr(g, attr(action.key)), f"general:{attr(action.key)}", tr(action.title))
-        for w in self.config.wheels:
-            add(w.hotkey, f"wheel:{w.id}", tr("Колесо «{name}»", name=w.name))
-        for p in self.config.phrases:
-            add(p.hotkey, f"phrase:{p.id}", tr("Фраза «{text}»", text=_short(p.text, 24)))
-        for snd in self.config.sounds:
-            add(snd.hotkey, f"sound:{snd.id}", tr("Звук «{name}»", name=snd.name))
-        for v in self.config.voices:
-            add(v.hotkey, f"voice:{v.id}", tr("Голос «{name}»", name=v.name))
+        for combo, key, name, _scope in self._hotkey_entries():
+            owners.setdefault(combo, []).append((key, name))
         return owners
 
-    def hotkey_conflict(self, combo: str, owner_key: str) -> str:
-        """Warning text if ``combo`` is already used by someone else."""
+    def _scope_of(self, owner_key: str) -> tuple | None:
+        kind, _sep, ident = owner_key.partition(":")
+        if kind in ("general", "voice"):
+            return None
+        items = {"phrase": self.config.phrases, "wheel": self.config.wheels, "sound": self.config.sounds}.get(kind, [])
+        item = next((x for x in items if x.id == ident), None)
+        return tuple(item.profiles) if item is not None else ()
+
+    def hotkey_clashes(self, combo: str, owner_key: str, scope: tuple | None | bool = False) -> list[str]:
+        """Names of other bindings that would fight with ``combo``.
+
+        Game-specific bindings replace everywhere-bindings on the same keys
+        while that game runs — that is not a clash.
+        """
         if not combo:
-            return ""
-        others = [name for key, name in self.hotkey_owners().get(combo, []) if key != owner_key]
+            return []
+        mine = self._scope_of(owner_key) if scope is False else scope
+        return [
+            name
+            for c, key, name, other in self._hotkey_entries()
+            if c == combo and key != owner_key and _scopes_clash(mine, other)
+        ]
+
+    def hotkey_conflict(self, combo: str, owner_key: str, scope: tuple | None | bool = False) -> str:
+        """Warning text if ``combo`` is already used by someone else."""
+        others = self.hotkey_clashes(combo, owner_key, scope)
         if not others:
             return ""
         return tr("⚠ {combo} уже занято: {others}", combo=format_combo(combo), others=", ".join(others))
@@ -460,12 +569,21 @@ class Controller(QObject):
         add(g.toggle_hotkeys_hotkey, ("action", "toggle_hotkeys"))  # wins conflicts: it must always work
         for key in ACTION_KEYS:
             add(getattr(g, attr(key)), ("action", key))
-        for w in self.config.wheels:
-            add(w.hotkey, ("wheel", w.id))
-        for p in self.config.phrases:
-            add(p.hotkey, ("phrase", p.id))
-        for snd in self.config.sounds:
-            add(snd.hotkey, ("sound", snd.id))
+        # the running game's own bindings first: they replace the everywhere-ones
+        active = self.active_profile_id
+        for scoped in (True, False):
+            def wanted(item, scoped=scoped) -> bool:
+                return bool(active and active in item.profiles) if scoped else not item.profiles
+
+            for w in self.config.wheels:
+                if wanted(w):
+                    add(w.hotkey, ("wheel", w.id))
+            for p in self.config.phrases:
+                if wanted(p):
+                    add(p.hotkey, ("phrase", p.id))
+            for snd in self.config.sounds:
+                if wanted(snd):
+                    add(snd.hotkey, ("sound", snd.id))
         for v in self.config.voices:
             add(v.hotkey, ("voice", v.id))
         self._actions = actions
@@ -514,7 +632,7 @@ class Controller(QObject):
         elif kind == "phrase":
             phrase = next((p for p in self.config.phrases if p.id == ident), None)
             if phrase:
-                self.say(phrase.text, phrase.voice_id, persist=True)
+                self.say(phrase.text, phrase.voice_id, persist=True, phrase=True)
         elif kind == "sound":
             self.play_sound(ident)
         elif kind == "voice":
@@ -537,6 +655,9 @@ class Controller(QObject):
             "volume_down": lambda: self.change_volume(-10),
             "toggle_hotkeys": lambda: self.set_hotkeys_enabled(not self.config.general.hotkeys_enabled),
             "show_window": self.toggle_window_requested.emit,
+            "translate": self.toggle_translation,
+            "next_language": lambda: self.cycle_language(+1),
+            "next_profile": self.cycle_profile_mode,
         }
         handler = handlers.get(key)
         if handler is not None:
@@ -556,6 +677,7 @@ class Controller(QObject):
     def open_input(self) -> None:
         if self._wheel is not None:
             self._wheel_close()
+        self._update_overlay_translation()
         self.input_overlay.open(self.config.active_voice().name, self.config.history)
 
     def _on_input_submitted(self, text: str, _keep_open: bool) -> None:
@@ -637,7 +759,7 @@ class Controller(QObject):
         if slot.sound_id and self.config.sound_by_id(slot.sound_id):
             self.play_sound(slot.sound_id)
         elif slot.text.strip():
-            self.say(slot.text, slot.voice_id, persist=True)
+            self.say(slot.text, slot.voice_id, persist=True, phrase=True)
 
     def _wheel_close(self) -> None:
         was_toggle = self._wheel is not None and self.config.general.wheel_mode == cfgmod.WHEEL_TOGGLE
@@ -650,6 +772,216 @@ class Controller(QObject):
         if was_toggle:
             self.rebind_hotkeys()
 
+    # --- translation ----------------------------------------------------------------
+
+    def translation_target(self, phrase: bool = False) -> str:
+        """Language to translate into right now ("" = speak as written)."""
+        t = self.config.translate
+        enabled, target = t.enabled, t.target
+        prof = self.active_profile()
+        if prof is not None:
+            if prof.translate:
+                enabled = prof.translate == "on"
+            target = prof.target or target
+        if not enabled or not target or (phrase and not t.phrases):
+            return ""
+        if t.source != "auto" and t.source == target:
+            return ""
+        return target
+
+    def translation_label(self) -> str:
+        target = self.translation_target()
+        return tl.short_label(self.config.translate.source, target) if target else ""
+
+    def voice_for_language(self, lang: str, base: VoiceProfile) -> VoiceProfile:
+        """The voice that reads text in ``lang``.
+
+        The user's choice for that language first; otherwise an Edge voice of
+        that language (same gender, same speed/pitch/RVC) replaces an Edge
+        voice that only speaks another language. Multilingual and cloud
+        voices speak it themselves.
+        """
+        t = self.config.translate
+        for item in t.voices:
+            if item.lang == lang:
+                chosen = self.config.voice_by_id(item.voice_id)
+                if chosen is not None:
+                    return chosen
+        if not t.auto_voice:
+            return base
+        spoken = tl.voice_language(base)
+        if not spoken or spoken == lang:
+            return base
+        return dataclasses.replace(base, voice=tl.edge_voice_for(lang, tl.is_female_voice(base.voice)))
+
+    def toggle_translation(self) -> None:
+        t = self.config.translate
+        prof = self.active_profile()
+        on = not bool(self.translation_target())
+        if prof is not None and prof.translate:
+            prof.translate = "on" if on else "off"
+            self.edited("profiles")
+        else:
+            t.enabled = on
+            self.edited("translate")
+        if on:
+            target = self.translation_target()
+            self.notify.emit(tr("Перевод включён: {label}", label=tl.short_label(t.source, target or t.target)), "success")
+        else:
+            self.notify.emit(tr("Перевод выключен — говорю как пишете"), "warning")
+
+    def cycle_language(self, step: int = 1) -> str:
+        t = self.config.translate
+        langs = t.favorites or tl.LANGUAGE_CODES
+        prof = self.active_profile()
+        current = (prof.target if prof is not None and prof.target else "") or t.target
+        idx = langs.index(current) if current in langs else -1
+        nxt = langs[(idx + step) % len(langs)]
+        if prof is not None and prof.target:
+            prof.target = nxt
+            self.edited("profiles")
+        else:
+            t.target = nxt
+            self.edited("translate")
+        self.notify.emit(tr("Язык перевода: {name}", name=tl.language_name(nxt)), "info")
+        return nxt
+
+    def translate_async(self, text: str, target: str, callback) -> None:
+        """Translate on a worker; ``callback(result, error)`` runs on the UI thread."""
+        job = self.translator.job(text, target)
+        future = self.speech.submit_call(self.translator.run, job)
+        future.add_done_callback(lambda f, cb=callback: self._preview_done.emit("", (f, cb)))
+
+    def _update_overlay_translation(self) -> None:
+        self.input_overlay.set_translation(self.translation_label(), self.config.translate.preview)
+
+    def _on_overlay_text_idle(self, text: str) -> None:
+        target = self.translation_target()
+        if not target or not self.config.translate.preview:
+            return
+        expanded = self._expand(text)
+        if not expanded or expanded.startswith(tl.SKIP_PREFIX):
+            self.input_overlay.show_preview("", False)
+            return
+        job = self.translator.job(expanded, target)
+        hit = self.translator.cached(job)
+        if hit is not None:
+            self.input_overlay.show_preview(hit, False, text)
+            return
+        future = self.speech.submit_call(self.translator.run, job)
+        future.add_done_callback(lambda f, typed=text: self._preview_done.emit(typed, f))
+
+    @Slot(str, object)
+    def _on_preview_done(self, typed: str, payload) -> None:
+        if isinstance(payload, tuple):  # translate_async
+            future, callback = payload
+            try:
+                callback(future.result(), "")
+            except TTSError as exc:
+                callback("", str(exc))
+            except Exception as exc:
+                callback("", tr("Ошибка перевода: {error}", error=exc))
+            self._translator_save.start()
+            return
+        try:
+            result, failed = payload.result(), False
+        except Exception as exc:
+            result, failed = str(exc), True
+        self._translator_save.start()
+        if self.input_overlay.isVisible():
+            self.input_overlay.show_preview(result, failed, typed)
+
+    # --- game profiles ----------------------------------------------------------------
+
+    def active_profile(self) -> GameProfile | None:
+        return self.config.profile_by_id(self.active_profile_id) if self.active_profile_id else None
+
+    def update_profile_watch(self) -> None:
+        """Start/stop watching for games after the profile settings changed."""
+        mode = self.config.general.profile_mode
+        watching = mode == cfgmod.PROFILE_AUTO and any(p.enabled and p.processes for p in self.config.profiles)
+        if watching:
+            if not self._profile_timer.isActive():
+                self._profile_timer.start()
+                QTimer.singleShot(0, self._poll_profiles)
+            elif self.active_profile_id and not self._profile_usable(self.active_profile()):
+                self._poll_profiles()
+            return
+        self._profile_timer.stop()
+        if mode == cfgmod.PROFILE_AUTO or mode == cfgmod.PROFILE_NONE:
+            self._activate_profile("")
+        else:
+            self._activate_profile(mode, manual=True)
+
+    @staticmethod
+    def _profile_usable(prof: GameProfile | None) -> bool:
+        return prof is not None and prof.enabled and bool(prof.processes)
+
+    def _poll_profiles(self) -> None:
+        if self.config.general.profile_mode != cfgmod.PROFILE_AUTO:
+            return
+        try:
+            running, front = processes.snapshot()
+        except Exception:
+            log.exception("process scan failed")
+            return
+        self._activate_profile(self.pick_profile(running, front))
+
+    def pick_profile(self, running: set[str], front: str = "") -> str:
+        """Which profile fits the running programs ("" = none)."""
+        matches = [p for p in self.config.profiles if self._profile_usable(p) and running.intersection(p.processes)]
+        if not matches:
+            return ""
+        for prof in matches:  # the game in front wins when several run
+            if front and front in prof.processes:
+                return prof.id
+        current = self.active_profile_id
+        return current if any(p.id == current for p in matches) else matches[0].id
+
+    def _activate_profile(self, profile_id: str, manual: bool = False) -> None:
+        if profile_id == self.active_profile_id:
+            return
+        g = self.config.general
+        old = self.active_profile()
+        new = self.config.profile_by_id(profile_id)
+        self.active_profile_id = new.id if new is not None else ""
+        # the profile's voice replaces the user's one while it is active
+        if g.voice_before_profile and (new is None or not new.voice_id):
+            if old is None or g.active_voice_id == old.voice_id:
+                self.set_active_voice(g.voice_before_profile)
+            g.voice_before_profile = ""
+        if new is not None and new.voice_id and self.config.voice_by_id(new.voice_id):
+            if not g.voice_before_profile:
+                g.voice_before_profile = g.active_voice_id
+            if g.active_voice_id != new.voice_id:
+                self.set_active_voice(new.voice_id)
+        self._save_timer.start()
+        if self._wheel is not None:
+            self._wheel_close()
+        self.rebind_hotkeys()
+        self._update_overlay_translation()
+        self._prewarm_timer.start()
+        self.profile_changed.emit(self.active_profile_id)
+        if new is not None:
+            how = tr("вручную") if manual else tr("игра запущена")
+            self.notify.emit(tr("Профиль «{name}» включён ({how})", name=new.name, how=how), "success")
+        elif old is not None:
+            self.notify.emit(tr("Профиль «{name}» выключен — обычные бинды", name=old.name), "info")
+
+    def set_profile_mode(self, mode: str) -> None:
+        """"auto", "none" or a profile id (always on)."""
+        self.config.general.profile_mode = mode
+        self.edited("profiles")
+
+    def cycle_profile_mode(self) -> None:
+        modes = [cfgmod.PROFILE_AUTO] + [p.id for p in self.config.profiles if p.enabled]
+        current = self.config.general.profile_mode
+        idx = modes.index(current) if current in modes else -1
+        nxt = modes[(idx + 1) % len(modes)]
+        self.set_profile_mode(nxt)
+        if nxt == cfgmod.PROFILE_AUTO:
+            self.notify.emit(tr("Профили: автоматически по запущенной игре"), "info")
+
     # --- warm-up ------------------------------------------------------------------
 
     def prewarm(self) -> None:
@@ -657,27 +989,46 @@ class Controller(QObject):
         allow_paid = cfg.cloud.prewarm_paid
         items = []
 
+        target = self.translation_target(phrase=True)
+        active = self.active_profile_id
+
         def add(text: str, voice_id: str) -> None:
-            if not text.strip() or textvars.has_vars(text):
+            text = text.strip()
+            if not text or textvars.has_vars(text):
                 return
             profile = cfg.resolve_voice(voice_id)
+            if target and not text.startswith(tl.SKIP_PREFIX):
+                # only phrases translated before: never spend requests in the background
+                translated = self.translator.cached(self.translator.job(text, target))
+                if translated is None:
+                    return
+                text, profile = translated, self.voice_for_language(target, profile)
+            elif text.startswith(tl.SKIP_PREFIX):
+                text = text[len(tl.SKIP_PREFIX):].strip()
             if profile.engine in cfgmod.CLOUD_ENGINES and not allow_paid:
                 return  # don't spend the user's credits on phrases they may never use
             items.append((text, profile))
 
+        def usable(item) -> bool:
+            return not item.profiles or active in item.profiles
+
         for p in cfg.phrases:
-            add(p.text, p.voice_id)
+            if usable(p):
+                add(p.text, p.voice_id)
         for w in cfg.wheels:
-            for s in w.slots:
-                if not s.sound_id:
-                    add(s.text, s.voice_id)
+            if usable(w):
+                for s in w.slots:
+                    if not s.sound_id:
+                        add(s.text, s.voice_id)
         self.speech.prewarm(items)
 
     # --- shutdown -------------------------------------------------------------------
 
     def shutdown(self) -> None:
         self._save_timer.stop()
+        self._profile_timer.stop()
         self.save_now()
+        self.translator.save()
         self.ptt.release()
         self.hotkeys.stop()
         self.audio.close()
@@ -685,6 +1036,16 @@ class Controller(QObject):
         self._sound_pool.shutdown(wait=False, cancel_futures=True)
         self.input_overlay.hide()
         self.wheel_overlay.hide()
+
+
+def _scopes_clash(a: tuple | None, b: tuple | None) -> bool:
+    if a is None or b is None:
+        return True  # actions and voices are always active
+    if not a and not b:
+        return True  # both work everywhere
+    if not a or not b:
+        return False  # a game's binding replaces the everywhere-one
+    return bool(set(a) & set(b))
 
 
 def _short(text: str, limit: int = 40) -> str:

@@ -40,6 +40,11 @@ PLAYBACK_INTERRUPT = "interrupt"
 WHEEL_HOLD = "hold"
 WHEEL_TOGGLE = "toggle"
 
+TRANSLATORS = ("google", "mymemory", "deepl", "claude", "openai")
+TRANSLATE_STYLES = ("natural", "gaming", "polite", "short")
+PROFILE_AUTO = "auto"  # GeneralSettings.profile_mode: "auto", "none" or a profile id
+PROFILE_NONE = "none"
+
 
 def new_id() -> str:
     return uuid.uuid4().hex[:10]
@@ -87,6 +92,7 @@ class Phrase:
     text: str = ""
     hotkey: str = ""
     voice_id: str = ""  # "" = active voice
+    profiles: list[str] = field(default_factory=list)  # game profile ids; empty = everywhere
 
 
 @dataclass
@@ -99,6 +105,7 @@ class Sound:
     hotkey: str = ""
     volume: int = 100  # percent, 0..200
     restart: bool = True  # pressing again restarts instead of layering
+    profiles: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -125,6 +132,21 @@ class Wheel:
     name: str = "Колесо"
     hotkey: str = ""
     slots: list[WheelSlot] = field(default_factory=lambda: [WheelSlot() for _ in range(8)])
+    profiles: list[str] = field(default_factory=list)
+
+
+@dataclass
+class GameProfile:
+    """Bindings that switch on by themselves while a game is running."""
+
+    id: str = field(default_factory=new_id)
+    name: str = "Игра"
+    processes: list[str] = field(default_factory=list)  # exe names, lower case: "cs2.exe"
+    enabled: bool = True
+    color: str = ""  # cover color, "" = derived from the name
+    voice_id: str = ""  # "" = keep the current voice
+    translate: str = ""  # "" = as set globally, "on", "off"
+    target: str = ""  # translation language override, "" = global
 
 
 @dataclass
@@ -164,6 +186,11 @@ class GeneralSettings:
     volume_down_hotkey: str = ""
     toggle_hotkeys_hotkey: str = ""
     show_window_hotkey: str = ""
+    translate_hotkey: str = ""
+    next_language_hotkey: str = ""
+    next_profile_hotkey: str = ""
+    profile_mode: str = PROFILE_AUTO
+    voice_before_profile: str = ""  # restored when the game profile switches off
     input_position: str = "center"  # top / center / bottom
     wheel_scale: int = 100  # percent
     check_updates: bool = True
@@ -189,7 +216,35 @@ class CloudSettings:
     azure_region: str = "westeurope"
     google_key: str = ""
     yandex_key: str = ""
+    deepl_key: str = ""  # translation
+    anthropic_key: str = ""  # translation with Claude
     prewarm_paid: bool = False  # pre-synthesize phrases with paid voices (costs credits)
+
+
+@dataclass
+class LanguageVoice:
+    lang: str = ""
+    voice_id: str = ""
+
+
+@dataclass
+class TranslateSettings:
+    """Translate what the user writes before it is spoken."""
+
+    enabled: bool = False
+    provider: str = "google"
+    source: str = "auto"
+    target: str = "en"
+    favorites: list[str] = field(default_factory=lambda: ["en", "de", "es", "fr"])  # cycled by a hotkey
+    style: str = "natural"
+    instructions: str = ""  # extra wishes for AI translators
+    phrases: bool = True  # also quick phrases and wheels
+    preview: bool = True  # live translation under the input box
+    auto_voice: bool = True  # pick a voice that speaks the target language
+    voices: list[LanguageVoice] = field(default_factory=list)
+    claude_model: str = "claude-opus-5-5"
+    openai_model: str = "gpt-4.1-mini"
+    email: str = ""  # MyMemory: raises the free daily limit
 
 
 @dataclass
@@ -198,10 +253,12 @@ class Config:
     general: GeneralSettings = field(default_factory=GeneralSettings)
     audio: AudioSettings = field(default_factory=AudioSettings)
     cloud: CloudSettings = field(default_factory=CloudSettings)
+    translate: TranslateSettings = field(default_factory=TranslateSettings)
     voices: list[VoiceProfile] = field(default_factory=list)
     phrases: list[Phrase] = field(default_factory=list)
     wheels: list[Wheel] = field(default_factory=list)
     sounds: list[Sound] = field(default_factory=list)
+    profiles: list[GameProfile] = field(default_factory=list)
     history: list[str] = field(default_factory=list)
 
     # --- lookups -----------------------------------------------------------
@@ -211,6 +268,9 @@ class Config:
 
     def sound_by_id(self, sound_id: str) -> Sound | None:
         return next((x for x in self.sounds if x.id == sound_id), None)
+
+    def profile_by_id(self, profile_id: str) -> GameProfile | None:
+        return next((x for x in self.profiles if x.id == profile_id), None)
 
     def active_voice(self) -> VoiceProfile:
         voice = self.voice_by_id(self.general.active_voice_id)
@@ -275,6 +335,35 @@ class Config:
                 w.slots += [WheelSlot() for _ in range(WHEEL_MIN_SLOTS - len(w.slots))]
             del w.slots[WHEEL_MAX_SLOTS:]
         del self.history[HISTORY_LIMIT:]
+
+        seen_ids = set()
+        for prof in self.profiles:
+            if prof.id in seen_ids:
+                prof.id = new_id()
+            seen_ids.add(prof.id)
+            names = []
+            for name in prof.processes:
+                name = name.strip().strip('"').replace("/", "\\").rsplit("\\", 1)[-1].lower()
+                if name and name not in names:
+                    names.append(name)
+            prof.processes = names
+            if prof.translate not in ("", "on", "off"):
+                prof.translate = ""
+        valid = {p.id for p in self.profiles}
+        for item in [*self.phrases, *self.wheels, *self.sounds]:
+            item.profiles = [pid for pid in dict.fromkeys(item.profiles) if pid in valid]
+        if g.profile_mode not in (PROFILE_AUTO, PROFILE_NONE) and g.profile_mode not in valid:
+            g.profile_mode = PROFILE_AUTO
+
+        t = self.translate
+        if t.provider not in TRANSLATORS:
+            t.provider = "google"
+        if t.style not in TRANSLATE_STYLES:
+            t.style = "natural"
+        t.source = (t.source or "auto").lower()
+        t.target = (t.target or "en").lower()
+        t.favorites = [code.lower() for code in dict.fromkeys(t.favorites) if code]
+        t.instructions = t.instructions[:500]
         self.active_voice()
         return self
 
@@ -410,7 +499,7 @@ def load_config(path: Path | None = None) -> Config:
     return _decrypt_keys(from_dict(Config, data)).normalize()
 
 
-KEY_FIELDS = ("elevenlabs_key", "openai_key", "azure_key", "google_key", "yandex_key")
+KEY_FIELDS = ("elevenlabs_key", "openai_key", "azure_key", "google_key", "yandex_key", "deepl_key", "anthropic_key")
 
 
 def save_config(cfg: Config, path: Path | None = None) -> None:

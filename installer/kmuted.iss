@@ -1,5 +1,5 @@
 ﻿; KMuted installer (Inno Setup 6). Build with tools/build_installer.py
-; or: iscc /DMyAppVersion=0.3.0 installer\kmuted.iss
+; or: iscc /DMyAppVersion=0.4.0 installer\kmuted.iss
 
 #ifndef MyAppVersion
   #define MyAppVersion "0.0.0"

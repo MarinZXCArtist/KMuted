@@ -66,6 +66,15 @@ def indirect_strings() -> set[str]:
 
     for text, label in config.DEFAULT_WHEEL:
         out.update((text, label))
+    from kmuted import translate
+
+    out.update(name for _c, name in translate.LANGUAGES)
+    out.update(title for _k, title in translate.STYLES)
+    for prov in translate.PROVIDERS.values():
+        out.update((prov.title, prov.description, prov.pricing))
+        out.update(label for _id, label in prov.models)
+    # plural forms passed to i18n.plural (English needs "one" and "many")
+    out.update(("фраза", "фраз", "колесо", "колёс", "звук", "звуков"))
     return {s for s in out if s and CYR.search(s)}
 
 

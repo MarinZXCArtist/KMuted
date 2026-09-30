@@ -24,8 +24,10 @@ from kmuted.ui.page_audio import AudioPage
 from kmuted.ui.page_home import HomePage
 from kmuted.ui.page_hotkeys import HotkeysPage
 from kmuted.ui.page_phrases import PhrasesPage
+from kmuted.ui.page_profiles import ProfilesPage
 from kmuted.ui.page_settings import SettingsPage
 from kmuted.ui.page_sounds import SoundsPage
+from kmuted.ui.page_translate import TranslatePage
 from kmuted.ui.page_voices import VoicesPage
 from kmuted.ui.page_wheels import WheelsPage
 from kmuted.ui.update_service import UpdateService
@@ -37,13 +39,17 @@ PAGES = [
     ("wheel", "Колёса", WheelsPage),
     ("volume", "Звуки", SoundsPage),
     ("voices", "Голоса", VoicesPage),
+    ("translate", "Перевод", TranslatePage),
+    ("gamepad", "Профили игр", ProfilesPage),
     ("audio", "Звук", AudioPage),
     ("keyboard", "Горячие клавиши", HotkeysPage),
     ("settings", "Настройки", SettingsPage),
 ]
 PAGE_VOICES = 4
-PAGE_AUDIO = 5
-PAGE_SETTINGS = 7
+PAGE_TRANSLATE = 5
+PAGE_PROFILES = 6
+PAGE_AUDIO = 7
+PAGE_SETTINGS = 9
 
 _ENGINE_ICON = {"edge": "globe", "sapi": "windows", "piper": "cpu"}  # cloud voices: sparkles
 
@@ -99,7 +105,9 @@ class MainWindow(QMainWindow):
         controller.speaking_changed.connect(self._on_speaking)
         controller.config_changed.connect(self._on_config_changed)
         controller.hotkeys_toggled.connect(self._on_hotkeys_toggled)
+        controller.profile_changed.connect(lambda _pid: self._refresh_game_line())
         self._refresh_voices()
+        self._refresh_game_line()
         self._refresh_status_card()
 
     # ------------------------------------------------------------ building
@@ -137,6 +145,7 @@ class MainWindow(QMainWindow):
         sl.addLayout(air)
         self.mic_dot, self.mic_label = self._status_line(sl)
         self.keys_dot, self.keys_label = self._status_line(sl)
+        self.game_dot, self.game_label = self._status_line(sl)
 
         lay = QVBoxLayout(sidebar)
         lay.setContentsMargins(0, 0, 0, 14)
@@ -281,6 +290,28 @@ class MainWindow(QMainWindow):
             self._refresh_voices()
         if section in ("general", "audio"):
             self._refresh_status_card()
+        if section in ("profiles", "translate", "general"):
+            self._refresh_game_line()
+
+    def _refresh_game_line(self) -> None:
+        """Third line of the sidebar card: active game profile and translation."""
+        c = self.controller
+        prof = c.active_profile()
+        target = c.translation_target()
+        parts = []
+        if prof is not None:
+            parts.append(prof.name)
+        if target:
+            parts.append(tr("перевод → {lang}", lang=target.upper()))
+        visible = bool(c.config.profiles) or bool(target)
+        self.game_dot.setVisible(visible)
+        self.game_label.setVisible(visible)
+        if not visible:
+            return
+        self.game_dot.set_state(theme.BLUE if (prof is not None or target) else theme.FAINT)
+        text = " · ".join(parts) if parts else tr("Обычный режим")
+        self.game_label.setText(self.game_label.fontMetrics().elidedText(text, Qt.ElideRight, 165))
+        self.game_label.setToolTip(text)
 
     def _refresh_voices(self) -> None:
         cfg = self.controller.config

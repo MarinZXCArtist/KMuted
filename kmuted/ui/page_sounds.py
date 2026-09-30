@@ -27,6 +27,7 @@ from kmuted.i18n import tr
 from kmuted.ui import theme
 from kmuted.ui.components import EmptyState, Equalizer, Keycaps, ToggleSwitch, icon_button, make_button, page_header
 from kmuted.ui.icons import icon
+from kmuted.ui.profile_widgets import ProfileScopeButton
 from kmuted.ui.widgets import HotkeyEdit, ValueSlider
 
 TILE_W = 230
@@ -60,6 +61,8 @@ class SoundDialog(QDialog):
         file_row.addWidget(replace)
         self.hotkey = HotkeyEdit(sound.hotkey)
         self.hotkey.changed.connect(self._check_conflict)
+        self.scope = ProfileScopeButton(controller, sound.profiles)
+        self.scope.changed.connect(lambda: self._check_conflict(self.hotkey.combo()))
         self.volume = ValueSlider(0, 200, sound.volume, lambda v: f"{v}%")
         self.restart = ToggleSwitch(sound.restart)
         restart_row = QHBoxLayout()
@@ -74,6 +77,7 @@ class SoundDialog(QDialog):
         form.addRow(tr("Название"), self.name)
         form.addRow(tr("Файл"), file_row)
         form.addRow(tr("Горячая клавиша"), self.hotkey)
+        form.addRow(tr("Где работает"), self.scope)
         form.addRow(tr("Громкость"), self.volume)
         form.addRow("", restart_row)
 
@@ -101,7 +105,7 @@ class SoundDialog(QDialog):
         self._check_conflict(sound.hotkey)
 
     def _check_conflict(self, combo: str) -> None:
-        text = self.controller.hotkey_conflict(combo, f"sound:{self.sound.id}")
+        text = self.controller.hotkey_conflict(combo, f"sound:{self.sound.id}", tuple(self.scope.profiles()))
         self.warning.setText(text)
         self.warning.setVisible(bool(text))
 
@@ -121,6 +125,7 @@ class SoundDialog(QDialog):
         self.sound.hotkey = self.hotkey.combo()
         self.sound.volume = self.volume.value()
         self.sound.restart = self.restart.isChecked()
+        self.sound.profiles = self.scope.profiles()
         super().accept()
 
 

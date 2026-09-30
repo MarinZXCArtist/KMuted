@@ -4,5 +4,5 @@
 микрофон (VB-Audio Virtual Cable и аналоги), как звуки в Soundpad.
 """
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 APP_NAME = "KMuted"

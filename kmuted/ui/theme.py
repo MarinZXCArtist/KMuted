@@ -92,6 +92,18 @@ QLabel#chipWarn {{
     background: {rgba(WARNING, 0.12)}; border: 1px solid {rgba(WARNING, 0.45)};
     border-radius: 10px; padding: 3px 10px; color: {WARNING}; font-size: 9pt; font-weight: 600;
 }}
+QLabel#chipGame {{
+    background: {rgba(BLUE, 0.12)}; border: 1px solid {rgba(BLUE, 0.4)};
+    border-radius: 9px; padding: 2px 8px; color: {TEXT}; font-size: 8.5pt; font-weight: 600;
+}}
+QPushButton#toggleChip {{
+    background: {SURFACE_2}; border: 1px solid {BORDER_2}; border-radius: 14px;
+    padding: 5px 12px; color: {MUTED}; font-size: 9pt;
+}}
+QPushButton#toggleChip:hover {{ border: 1px solid {rgba(ACCENT, 0.6)}; color: {TEXT}; }}
+QPushButton#toggleChip:checked {{
+    background: {rgba(ACCENT, 0.22)}; border: 1px solid {ACCENT}; color: {TEXT}; font-weight: 650;
+}}
 
 QFrame#card {{
     background: {SURFACE}; border: 1px solid {BORDER}; border-radius: {RADIUS + 2}px;

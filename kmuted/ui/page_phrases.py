@@ -24,6 +24,7 @@ from kmuted.textvars import VARIABLES
 from kmuted.ui import theme
 from kmuted.ui.components import EmptyState, Keycaps, icon_button, make_button, page_header
 from kmuted.ui.icons import icon
+from kmuted.ui.profile_widgets import ProfileScopeButton, profile_chips
 from kmuted.ui.widgets import HotkeyEdit, fill_voice_combo
 from kmuted.i18n import tr
 
@@ -48,6 +49,8 @@ class PhraseDialog(QDialog):
         self.warning.setStyleSheet(f"color: {theme.WARNING};")
         self.warning.setWordWrap(True)
         self.hotkey.changed.connect(self._check_conflict)
+        self.scope = ProfileScopeButton(controller, phrase.profiles)
+        self.scope.changed.connect(lambda: self._check_conflict(self.hotkey.combo()))
         vars_hint = QLabel(
             tr("Можно вставлять: {vars}", vars="  ".join(f"<b>{{{names[0] if language() == 'ru' else names[1]}}}</b>" for names, _d in VARIABLES))
         )
@@ -66,6 +69,7 @@ class PhraseDialog(QDialog):
         form.addRow("", vars_hint)
         form.addRow(tr("Горячая клавиша"), self.hotkey)
         form.addRow(tr("Голос"), self.voice)
+        form.addRow(tr("Где работает"), self.scope)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         ok = buttons.button(QDialogButtonBox.Ok)
@@ -91,7 +95,7 @@ class PhraseDialog(QDialog):
         self._check_conflict(phrase.hotkey)
 
     def _check_conflict(self, combo: str) -> None:
-        text = self.controller.hotkey_conflict(combo, f"phrase:{self.phrase.id}")
+        text = self.controller.hotkey_conflict(combo, f"phrase:{self.phrase.id}", tuple(self.scope.profiles()))
         self.warning.setText(text)
         self.warning.setVisible(bool(text))
 
@@ -106,6 +110,7 @@ class PhraseDialog(QDialog):
         self.phrase.text = self.text.toPlainText().strip()
         self.phrase.hotkey = self.hotkey.combo()
         self.phrase.voice_id = self.voice.currentData() or ""
+        self.phrase.profiles = self.scope.profiles()
         super().accept()
 
 
@@ -115,7 +120,7 @@ class PhraseCard(QFrame):
     remove_requested = Signal()
     move_requested = Signal(int)
 
-    def __init__(self, phrase: Phrase, voice_name: str, conflict: str) -> None:
+    def __init__(self, phrase: Phrase, voice_name: str, conflict: str, chips: list | None = None) -> None:
         super().__init__()
         self.setObjectName("cardHover")
         self.setCursor(Qt.PointingHandCursor)
@@ -146,6 +151,8 @@ class PhraseCard(QFrame):
         chip = QLabel(voice_name)
         chip.setObjectName("chip")
         meta.addWidget(chip)
+        for extra in chips or []:
+            meta.addWidget(extra)
         if conflict:
             warn = QLabel(tr("клавиша занята"))
             warn.setObjectName("chipWarn")
@@ -238,7 +245,7 @@ class PhrasesPage(QWidget):
     def _on_config_changed(self, section: str) -> None:
         if section == "phrases":
             self.refresh()  # our own edit: show it right away
-        elif section in ("voices", "general", "wheels"):
+        elif section in ("voices", "general", "wheels", "profiles"):
             self._refresh_timer.start()
 
     def refresh(self) -> None:
@@ -262,8 +269,9 @@ class PhrasesPage(QWidget):
         for phrase in shown:
             voice = cfg.voice_by_id(phrase.voice_id)
             conflict = self.controller.hotkey_conflict(phrase.hotkey, f"phrase:{phrase.id}")
-            card = PhraseCard(phrase, voice.name if voice else tr("голос по умолчанию"), conflict)
-            card.play_requested.connect(lambda p=phrase: self.controller.say(p.text, p.voice_id, persist=True))
+            chips = profile_chips(self.controller, phrase)
+            card = PhraseCard(phrase, voice.name if voice else tr("голос по умолчанию"), conflict, chips)
+            card.play_requested.connect(lambda p=phrase: self.controller.say(p.text, p.voice_id, persist=True, phrase=True))
             card.edit_requested.connect(lambda p=phrase: self.edit_phrase(p))
             card.remove_requested.connect(lambda p=phrase: self.remove_phrase(p))
             card.move_requested.connect(lambda step, p=phrase: self.move_phrase(p, step))

@@ -46,6 +46,9 @@ def main() -> int:
         "piper",
         "--hidden-import",
         "win32timezone",
+        # Claude translator: the SDK loads parts of itself lazily
+        "--collect-submodules",
+        "anthropic",
         "--exclude-module",
         "tkinter",
         "--exclude-module",

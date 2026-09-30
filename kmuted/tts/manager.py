@@ -89,6 +89,10 @@ class SpeechService:
         snapshot = dataclasses.replace(profile)
         return self._pool.submit(self.synthesize, text, snapshot, persist)
 
+    def submit_call(self, fn, *args) -> Future:
+        """Run ``fn`` on the speech workers (translation + synthesis jobs)."""
+        return self._pool.submit(fn, *args)
+
     def prewarm(self, items: Iterable[tuple[str, VoiceProfile]]) -> None:
         """Synthesize fixed phrases in the background (errors are ignored)."""
         now = time.monotonic()
