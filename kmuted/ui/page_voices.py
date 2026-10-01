@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QListWidget,
     QListWidgetItem,
+    QMenu,
     QMessageBox,
     QScrollArea,
     QSpinBox,
@@ -25,7 +26,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from kmuted import paths
+from kmuted import paths, voice_presets
 from kmuted.config import CLOUD_ENGINES, ENGINE_EDGE, ENGINE_PIPER, ENGINE_SAPI, FREE_ENGINES, VoiceProfile, new_id
 from kmuted.tts.base import VoiceInfo
 from kmuted.ui import theme
@@ -63,6 +64,15 @@ class VoicesPage(QWidget):
         self.list.currentRowChanged.connect(lambda _r: self._load_profile())
         add = make_button(tr("Новый голос"), "plus", "primary")
         add.clicked.connect(self.add_profile)
+        presets = make_button(tr("Готовые голоса"), "star")
+        presets.setToolTip(tr("Добавить голос одной кнопкой, например «Кава (Максим)»"))
+        preset_menu = QMenu(presets)
+        for preset in voice_presets.PRESETS:
+            action = preset_menu.addAction(tr(preset.name))
+            action.setToolTip(tr(preset.description))
+            action.triggered.connect(lambda _c=False, pr=preset: self.add_preset(pr))
+        preset_menu.setToolTipsVisible(True)
+        presets.setMenu(preset_menu)
         dup = make_button(tr("Копия"), "copy")
         dup.clicked.connect(self.duplicate_profile)
         remove = make_button(tr("Удалить"), "trash", "danger")
@@ -74,6 +84,7 @@ class VoicesPage(QWidget):
         row1.addWidget(remove)
         left = QVBoxLayout()
         left.addWidget(add)
+        left.addWidget(presets)
         left.addWidget(self.list, 1)
         left.addWidget(self.make_active)
         left.addLayout(row1)
@@ -182,6 +193,11 @@ class VoicesPage(QWidget):
         key_row.addWidget(eye)
         key_row.addWidget(self.get_key)
         cr.addLayout(key_row)
+        self.api_secret = QLineEdit()
+        self.api_secret.setEchoMode(QLineEdit.Password)
+        self.api_secret.setPlaceholderText("Secret access key")
+        self.api_secret.editingFinished.connect(self._api_secret_changed)
+        cr.addWidget(self.api_secret)
         extra_row = QHBoxLayout()
         self.region = QLineEdit()
         self.region.setPlaceholderText(tr("регион, например westeurope"))
@@ -365,8 +381,18 @@ class VoicesPage(QWidget):
             self.api_key.blockSignals(True)
             self.api_key.setText(getattr(self.controller.config.cloud, engine.key_field, ""))
             self.api_key.blockSignals(False)
-            self.region.setVisible(engine_key == "azure")
-            self.region.setText(self.controller.config.cloud.azure_region)
+            cloud = self.controller.config.cloud
+            is_polly = engine_key == "polly"
+            self.api_key.setPlaceholderText("Access key ID" if is_polly else tr("Вставьте ключ API"))
+            self.api_secret.setVisible(is_polly)
+            self.api_secret.blockSignals(True)
+            self.api_secret.setText(cloud.polly_secret)
+            self.api_secret.blockSignals(False)
+            self.region.setVisible(engine_key in ("azure", "polly"))
+            self.region.setText(cloud.polly_region if is_polly else cloud.azure_region)
+            self.region.setPlaceholderText(
+                tr("регион, например eu-central-1") if is_polly else tr("регион, например westeurope")
+            )
             self.model.blockSignals(True)
             self.model.clear()
             for model_id, label in engine.models:
@@ -380,7 +406,7 @@ class VoicesPage(QWidget):
         self.piper_row.setVisible(is_piper)
         self.speaker.setVisible(is_piper)
         self.speaker_label.setVisible(is_piper)
-        self.pitch.setEnabled(engine_key in (ENGINE_EDGE, ENGINE_SAPI, "azure", "google"))
+        self.pitch.setEnabled(engine_key in (ENGINE_EDGE, ENGINE_SAPI, "azure", "google", "polly"))
         self.pitch_label.setEnabled(self.pitch.isEnabled())
         for w in self.rvc_fields:
             w.setEnabled(bool(p and p.rvc_enabled))
@@ -585,12 +611,57 @@ class VoicesPage(QWidget):
         self._request_voices(engine.key, refresh=True)
 
     def _region_changed(self) -> None:
-        value = self.region.text().strip() or "westeurope"
-        if value != self.controller.config.cloud.azure_region:
-            self.controller.config.cloud.azure_region = value
+        engine_key = self._profile_engine()
+        field, default = ("polly_region", "eu-central-1") if engine_key == "polly" else ("azure_region", "westeurope")
+        value = self.region.text().strip() or default
+        if value != getattr(self.controller.config.cloud, field):
+            setattr(self.controller.config.cloud, field, value)
             self.controller.edited("cloud")
-            self._voice_lists.pop("azure", None)
-            self._request_voices("azure", refresh=True)
+            self._voice_lists.pop(engine_key, None)
+            self._request_voices(engine_key, refresh=True)
+
+    def _api_secret_changed(self) -> None:
+        value = self.api_secret.text().strip()
+        cloud = self.controller.config.cloud
+        if value == cloud.polly_secret:
+            return
+        cloud.polly_secret = value
+        self.controller.edited("cloud")
+        self._voice_lists.pop("polly", None)
+        self._update_engine_ui()
+        self._request_voices("polly", refresh=True)
+
+    # ------------------------------------------------------------------ ready-made voices
+
+    def add_preset(self, preset) -> None:
+        """Add a ready-made voice: an installed IVONA voice if there is one, else Amazon Polly."""
+        name = tr(preset.name)
+        sapi = self.controller.speech.engines.get(ENGINE_SAPI)
+
+        def find():
+            if sapi is None or sapi.availability():
+                return []
+            return sapi.list_voices()
+
+        def done(sapi_voices, _error) -> None:
+            profile, offline = voice_presets.build(preset, name, sapi_voices or [])
+            voices = self.controller.config.voices
+            voices.append(profile)
+            self.controller.edited("voices")
+            polly = self.controller.speech.engines.get("polly")
+            ready = offline or (polly is not None and not polly.availability())
+            if ready:
+                self.controller.set_active_voice(profile.id)
+            self.refresh_list(select=voices.index(profile))
+            if offline:
+                text = tr("Голос «{name}» добавлен: нашёл установленный IVONA — работает без интернета.", name=name)
+            elif ready:
+                text = tr("Голос «{name}» добавлен через Amazon Polly и выбран основным.", name=name)
+            else:
+                text = tr("Голос «{name}» добавлен. Это Amazon Polly: вставьте ниже ключи AWS (кнопка «Получить ключ»).", name=name)
+            self.controller.notify.emit(text, "success" if ready else "info")
+
+        run_in_background(find, done)
 
     def _open_signup(self) -> None:
         engine = self._cloud_engine()

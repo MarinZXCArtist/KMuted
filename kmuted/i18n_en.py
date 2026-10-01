@@ -814,4 +814,27 @@ EN: dict[str, str] = {
     "Работает только в этой игре": "Works only in this game",
     "Только: {names}": "Only: {names}",
     "Создайте профиль игры на вкладке «Профили игр», чтобы привязать к игре": "Create a game profile on the Game profiles page to tie this to a game",
+    # --- Amazon Polly and ready-made voices ---------------------------------------------
+    "Amazon Polly (облако)": "Amazon Polly (cloud)",
+    "Standard — классика IVONA": "Standard — classic IVONA",
+    "Neural — нейросеть": "Neural",
+    "Классические голоса IVONA: «Максим» (голос из роликов Кавы) и «Татьяна», плюс голоса на других языках. Нужны ключи AWS.":
+        "The classic IVONA voices: “Maxim” (the voice from Kava's videos) and “Tatyana”, plus voices in other languages. Needs AWS keys.",
+    "Первые 12 месяцев 5 млн символов в месяц бесплатно, дальше ~4 $ за 1 млн символов":
+        "5 million characters a month free for the first 12 months, then ~$4 per 1 million characters",
+    "Нужны ключи AWS (Access key ID и Secret access key) — вставьте их ниже": "Needs AWS keys (Access key ID and Secret access key) — paste them below",
+    "Для Amazon Polly нужны ключи AWS (вкладка «Голоса»)": "Amazon Polly needs AWS keys (Voices page)",
+    "регион, например eu-central-1": "region, e.g. eu-central-1",
+    "Готовые голоса": "Ready-made voices",
+    "Добавить голос одной кнопкой, например «Кава (Максим)»": "Add a voice in one click, e.g. “Kava (Maxim)”",
+    "Кава (Максим)": "Kava (Maxim)",
+    "Голос IVONA «Максим» с ускорением, как в роликах Кавы про Rust": "The IVONA “Maxim” voice sped up, like in Kava's Rust videos",
+    "Максим (IVONA)": "Maxim (IVONA)",
+    "Классический «Максим» без изменений": "The classic “Maxim”, unchanged",
+    "Татьяна (IVONA)": "Tatyana (IVONA)",
+    "Классическая женская пара «Максима»": "The classic female counterpart of “Maxim”",
+    "Голос «{name}» добавлен: нашёл установленный IVONA — работает без интернета.": "Voice “{name}” added: found an installed IVONA voice — works offline.",
+    "Голос «{name}» добавлен через Amazon Polly и выбран основным.": "Voice “{name}” added via Amazon Polly and made the default.",
+    "Голос «{name}» добавлен. Это Amazon Polly: вставьте ниже ключи AWS (кнопка «Получить ключ»).":
+        "Voice “{name}” added. It uses Amazon Polly: paste your AWS keys below (“Get a key” button).",
 }

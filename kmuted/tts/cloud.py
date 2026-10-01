@@ -8,8 +8,11 @@ direction and link to the provider's own pages.
 from __future__ import annotations
 
 import base64
+import hashlib
+import hmac
 import json
 import logging
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -304,4 +307,140 @@ class YandexEngine(CloudEngine):
         return Clip(samples, rate)
 
 
-CLOUD_CLASSES = (ElevenLabsEngine, OpenAIEngine, AzureEngine, GoogleEngine, YandexEngine)
+def aws_sigv4_headers(
+    method: str,
+    url: str,
+    region: str,
+    service: str,
+    access_key: str,
+    secret_key: str,
+    body: bytes = b"",
+    content_type: str = "",
+    amz_date: str = "",
+) -> dict:
+    """Headers for an AWS Signature Version 4 request (no boto3 needed)."""
+    parts = urllib.parse.urlsplit(url)
+    host = parts.netloc
+    amz_date = amz_date or time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    day = amz_date[:8]
+    query = urllib.parse.parse_qsl(parts.query, keep_blank_values=True)
+    canonical_query = "&".join(
+        f"{urllib.parse.quote(k, safe='-_.~')}={urllib.parse.quote(v, safe='-_.~')}" for k, v in sorted(query)
+    )
+    headers = {"host": host, "x-amz-date": amz_date}
+    if content_type:
+        headers["content-type"] = content_type
+    signed = ";".join(sorted(headers))
+    canonical_headers = "".join(f"{k}:{headers[k].strip()}\n" for k in sorted(headers))
+    canonical_request = "\n".join(
+        [
+            method,
+            urllib.parse.quote(parts.path or "/", safe="/-_.~"),
+            canonical_query,
+            canonical_headers,
+            signed,
+            hashlib.sha256(body).hexdigest(),
+        ]
+    )
+    scope = f"{day}/{region}/{service}/aws4_request"
+    to_sign = "\n".join(["AWS4-HMAC-SHA256", amz_date, scope, hashlib.sha256(canonical_request.encode("utf-8")).hexdigest()])
+
+    def mac(key: bytes, msg: str) -> bytes:
+        return hmac.new(key, msg.encode("utf-8"), hashlib.sha256).digest()
+
+    key = mac(("AWS4" + secret_key).encode("utf-8"), day)
+    for part in (region, service, "aws4_request"):
+        key = mac(key, part)
+    signature = hmac.new(key, to_sign.encode("utf-8"), hashlib.sha256).hexdigest()
+    out = {
+        "X-Amz-Date": amz_date,
+        "Authorization": f"AWS4-HMAC-SHA256 Credential={access_key}/{scope}, SignedHeaders={signed}, Signature={signature}",
+    }
+    if content_type:
+        out["Content-Type"] = content_type
+    return out
+
+
+class PollyEngine(CloudEngine):
+    """Amazon Polly — home of the classic IVONA voices («Максим», «Татьяна»)."""
+
+    key = "polly"
+    title = "Amazon Polly (облако)"
+    description = (
+        "Классические голоса IVONA: «Максим» (голос из роликов Кавы) и «Татьяна», плюс голоса на других языках. "
+        "Нужны ключи AWS."
+    )
+    key_field = "polly_key_id"
+    signup_url = "https://console.aws.amazon.com/iam/home#/security_credentials"
+    pricing = "Первые 12 месяцев 5 млн символов в месяц бесплатно, дальше ~4 $ за 1 млн символов"
+    models = (
+        ("standard", "Standard — классика IVONA"),
+        ("neural", "Neural — нейросеть"),
+    )
+
+    def _region(self) -> str:
+        return (self._settings().polly_region or "eu-central-1").strip()
+
+    def _secret(self) -> str:
+        return self._settings().polly_secret.strip()
+
+    def availability(self) -> str:
+        if not self.api_key or not self._secret():
+            return tr("Нужны ключи AWS (Access key ID и Secret access key) — вставьте их ниже")
+        return ""
+
+    def _need_key(self) -> None:
+        if not self.api_key or not self._secret():
+            raise TTSError(tr("Для Amazon Polly нужны ключи AWS (вкладка «Голоса»)"))
+
+    def _request(self, method: str, path: str, body: bytes = b"") -> bytes:
+        url = f"https://polly.{self._region()}.amazonaws.com{path}"
+        ctype = "application/json" if body else ""
+        headers = aws_sigv4_headers(method, url, self._region(), "polly", self.api_key, self._secret(), body, ctype)
+        return _http(method, url, headers, body or None)
+
+    def fallback_voices(self) -> list[VoiceInfo]:
+        return [VoiceInfo("Maxim", "Maxim (Максим)", "ru-RU", "Male"), VoiceInfo("Tatyana", "Tatyana (Татьяна)", "ru-RU", "Female")]
+
+    def list_voices(self, refresh: bool = False) -> list[VoiceInfo]:
+        if self._voices is not None and not refresh:
+            return self._voices
+        if not self.api_key or not self._secret():
+            return self.fallback_voices()
+        self._voices = self.fetch_voices()
+        return self._voices
+
+    def fetch_voices(self) -> list[VoiceInfo]:
+        try:
+            data = json.loads(self._request("GET", "/v1/voices"))
+        except ValueError as exc:
+            raise TTSError(tr("Сервис вернул непонятный ответ")) from exc
+        voices = []
+        for v in data.get("Voices", []):
+            engines = ", ".join(v.get("SupportedEngines") or [])
+            voices.append(VoiceInfo(v.get("Id", ""), v.get("Name", "?"), v.get("LanguageCode", ""), v.get("Gender", ""), engines))
+        voices.sort(key=lambda v: (not v.language.startswith("ru"), v.language, v.name))
+        return voices or self.fallback_voices()
+
+    def synthesize(self, text: str, profile: VoiceProfile) -> Clip:
+        self._need_key()
+        engine = profile.model or "standard"
+        rate = max(20, min(200, 100 + profile.rate))
+        prosody = f'rate="{rate}%"'
+        if engine == "standard" and profile.pitch:  # neural voices ignore pitch
+            prosody += f' pitch="{max(-33, min(50, round(profile.pitch / 2))):+d}%"'
+        ssml = f"<speak><prosody {prosody}>{escape(text)}</prosody></speak>"
+        payload = {
+            "Engine": engine,
+            "OutputFormat": "mp3",
+            "SampleRate": "22050",
+            "Text": ssml,
+            "TextType": "ssml",
+            "VoiceId": profile.voice or "Maxim",
+        }
+        audio = self._request("POST", "/v1/speech", json.dumps(payload).encode("utf-8"))
+        samples, sample_rate = decode_audio_bytes(audio)
+        return Clip(samples, sample_rate)
+
+
+CLOUD_CLASSES = (ElevenLabsEngine, OpenAIEngine, AzureEngine, GoogleEngine, YandexEngine, PollyEngine)

@@ -30,7 +30,7 @@ HISTORY_LIMIT = 50
 ENGINE_EDGE = "edge"
 ENGINE_SAPI = "sapi"
 ENGINE_PIPER = "piper"
-CLOUD_ENGINES = ("elevenlabs", "openai", "azure", "google", "yandex")
+CLOUD_ENGINES = ("elevenlabs", "openai", "azure", "google", "yandex", "polly")
 FREE_ENGINES = (ENGINE_EDGE, ENGINE_SAPI, ENGINE_PIPER)
 ENGINES = FREE_ENGINES + CLOUD_ENGINES
 
@@ -216,6 +216,9 @@ class CloudSettings:
     azure_region: str = "westeurope"
     google_key: str = ""
     yandex_key: str = ""
+    polly_key_id: str = ""  # Amazon Polly (AWS access key ID + secret)
+    polly_secret: str = ""
+    polly_region: str = "eu-central-1"
     deepl_key: str = ""  # translation
     anthropic_key: str = ""  # translation with Claude
     prewarm_paid: bool = False  # pre-synthesize phrases with paid voices (costs credits)
@@ -499,7 +502,10 @@ def load_config(path: Path | None = None) -> Config:
     return _decrypt_keys(from_dict(Config, data)).normalize()
 
 
-KEY_FIELDS = ("elevenlabs_key", "openai_key", "azure_key", "google_key", "yandex_key", "deepl_key", "anthropic_key")
+KEY_FIELDS = (
+    "elevenlabs_key", "openai_key", "azure_key", "google_key", "yandex_key",
+    "polly_key_id", "polly_secret", "deepl_key", "anthropic_key",
+)
 
 
 def save_config(cfg: Config, path: Path | None = None) -> None:

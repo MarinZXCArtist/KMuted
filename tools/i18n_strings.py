@@ -73,6 +73,10 @@ def indirect_strings() -> set[str]:
     for prov in translate.PROVIDERS.values():
         out.update((prov.title, prov.description, prov.pricing))
         out.update(label for _id, label in prov.models)
+    from kmuted import voice_presets
+
+    for preset in voice_presets.PRESETS:
+        out.update((preset.name, preset.description))
     # plural forms passed to i18n.plural (English needs "one" and "many")
     out.update(("фраза", "фраз", "колесо", "колёс", "звук", "звуков"))
     return {s for s in out if s and CYR.search(s)}

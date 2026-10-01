@@ -66,6 +66,7 @@ translation (**Translate** page) and create a profile for your game (**Game prof
 - New artwork: the Home banner and the wheel center (drawn by code).
 - Tray menu: "Translate before speaking" toggle; the sidebar shows the active profile and language.
 - `run.bat` installs Python (via `winget`) and the libraries by itself — just download the ZIP and run it.
+- 🎙 **Kava's voice** — Ready-made voices → Kava (Maxim): IVONA "Maxim" from your PC or via the new **Amazon Polly** engine.
 
 **0.3.0** — soundboard (mp3/wav on hotkeys), cloud voices (ElevenLabs, OpenAI, Azure, Google,
 Yandex), English interface, installer and auto-updates, a Hotkeys page to bind everything,
@@ -85,7 +86,8 @@ Yandex), English interface, installer and auto-updates, a Hotkeys page to bind e
 | 🎮 **Game profiles** | Own set of phrases, wheels and sounds for each game: start CS2 — your CS2 callouts switch on; close it — your usual bindings are back. A game can also switch the voice and translation language. 28 popular games built in, or pick any running program. |
 | 🗣 **Voices** | Microsoft Edge neural voices (hundreds of them in ~80 languages), Windows voices, offline Piper voices. Speed, pitch, volume. |
 | 🧬 **Custom voices** | Your own Piper models (`.onnx`) and **RVC models from voice changers** (`.pth` + `.index`). |
-| ☁️ **Cloud voices** | ElevenLabs, OpenAI, Microsoft Azure, Google Cloud, Yandex SpeechKit — pick from a list; needs your own API key (stored encrypted). |
+| ☁️ **Cloud voices** | ElevenLabs, OpenAI, Microsoft Azure, Google Cloud, Yandex SpeechKit, Amazon Polly — pick from a list; needs your own API key (stored encrypted). |
+| 🎙 **Ready-made voices** | One click: "Kava (Maxim)" — the IVONA "Maxim" voice like in Kava's Rust videos — plus "Maxim" and "Tatyana" (IVONA). |
 | 🔊 **Sounds and memes** | Soundboard: your mp3 / wav / ogg / flac files on hotkeys, straight into the mic, on top of speech. Drag and drop files into the window. Sounds can go into wheel slots too. |
 | ⌨️ **Bind everything** | The Hotkeys page: input box, repeat, stop, sounds, voice switching, translation and language, game profile, mute, monitor, live mic, volume ±, pause, show window — plus a key for every phrase, wheel, sound and voice. Keys, combos and side mouse buttons. |
 | 🧩 **Variables** | `{time}`, `{date}`, `{day}`, `{clipboard}`, `{random:a\|b\|c}`, `{number:1-100}` right inside phrases. |
@@ -309,9 +311,27 @@ service's website.
 | **OpenAI** | per character, usually cheaper than ElevenLabs | Lively multilingual voices |
 | **Yandex SpeechKit** | per character, starter grant | The best Russian voices |
 | **ElevenLabs** | free quota, then subscription | The most lifelike voices + your own voices from your ElevenLabs account |
+| **Amazon Polly** | 5 million characters a month free for the first 12 months, then ~$4 per million | The classic IVONA voices: "Maxim" (like Kava's) and "Tatyana" |
 
 Paid voices don't pre-synthesize phrases, so your credits aren't wasted: a phrase is synthesized
 the first time you press it and then comes from the cache.
+
+### Kava's voice (IVONA "Maxim")
+
+The voice in Kava's Rust videos ("ДержиДверь") is the classic **IVONA "Maxim"** synthesizer, sped up a
+little. The voice itself can't be bundled with KMuted: it's commercial and closed (IVONA now belongs to
+Amazon). So KMuted takes the same "Maxim" from wherever you have it:
+
+1. Voices page → **Ready-made voices → Kava (Maxim)**.
+2. If **IVONA 2 Maxim** is installed on your PC, KMuted finds it by itself — offline and free.
+3. If not, the voice is added via **Amazon Polly** (it has the same "Maxim"). You need AWS keys:
+   create an account at [aws.amazon.com](https://aws.amazon.com/), create an *Access key* under
+   *Security credentials* and paste the **Access key ID** and **Secret access key** into the fields
+   under the engine. 5 million characters a month are free for the first 12 months (tens of thousands of
+   phrases), then about $4 per million characters.
+
+The preset speeds the voice up by 12%; tweak speed and pitch on the same page. There's also the unchanged
+"Maxim (IVONA)" and the female "Tatyana (IVONA)".
 
 ### Custom voices from voice changers (RVC)
 
