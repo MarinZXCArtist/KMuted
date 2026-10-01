@@ -338,15 +338,10 @@ class SoundsPage(QWidget):
         self.import_paths(paths)
 
     def import_paths(self, paths: list[str]) -> None:
-        added, errors = 0, []
-        for path in paths:
-            try:
-                stored = soundlib.import_file(path)
-            except (soundlib.SoundError, OSError) as exc:
-                errors.append(str(exc))
-                continue
-            self.controller.config.sounds.append(Sound(name=soundlib.nice_name(stored), file=stored))
-            added += 1
+        sounds = self.controller.config.sounds
+        before = len(sounds)
+        _added, errors = soundlib.import_sounds(sounds, paths)
+        added = len(sounds) - before
         if added:
             self.controller.edited("sounds")
             self.controller.notify.emit(tr("Добавлено звуков: {n}", n=added), "success")

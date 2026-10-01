@@ -58,10 +58,37 @@ jobs:
           path: dist/KMuted
           if-no-files-found: error
 
+      # A new version number in kmuted/__init__.py on the default branch
+      # publishes a release by itself; the app updates from it in one click.
+      - name: Version and release notes
+        id: ver
+        shell: bash
+        run: |
+          version=$(python -c "from kmuted import __version__; print(__version__)")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          python tools/release_notes.py "$version" > dist/release-notes.md
+
+      - name: Is this version released yet?
+        id: rel
+        if: github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "v${{ steps.ver.outputs.version }}" --repo "${{ github.repository }}" > /dev/null 2>&1; then
+            echo "new=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "new=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Publish release
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/v') || steps.rel.outputs.new == 'true'
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('v{0}', steps.ver.outputs.version) }}
+          target_commitish: ${{ github.sha }}
+          name: KMuted ${{ steps.ver.outputs.version }}
+          body_path: dist/release-notes.md
           files: |
             dist/KMuted-Setup-*.exe
             dist/*.zip

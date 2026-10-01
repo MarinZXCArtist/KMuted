@@ -127,8 +127,11 @@ def _wav(path, seconds=0.2, rate=16000):
 def test_sound_import_and_decode(tmp_path):
     src = _wav(tmp_path / "boom.wav")
     stored = soundlib.import_file(src)
-    again = soundlib.import_file(src)
-    assert stored != again  # no overwrite of an existing file
+    assert soundlib.import_file(src) == stored  # the same file again: no second copy
+    other = tmp_path / "other"
+    other.mkdir()
+    different = _wav(other / "boom.wav", seconds=0.3)
+    assert soundlib.import_file(different) != stored  # same name, other sound: never overwritten
     lib = soundlib.SoundLibrary()
     pcm, rate = lib.load(Sound(file=stored))
     assert pcm.dtype == np.int16 and rate == 16000 and len(pcm) == 3200
@@ -215,3 +218,12 @@ def test_cloud_without_key_explains():
     assert [v.id for v in engine.list_voices()][:2] == ["alloy", "ash"]
     with pytest.raises(TTSError):
         engine.synthesize("hi", VoiceProfile(engine="openai"))
+
+
+def test_import_sounds_reuses_entries(tmp_path):
+    sounds = []
+    src = _wav(tmp_path / "horn.wav")
+    first, errors = soundlib.import_sounds(sounds, [src, tmp_path / "notes.txt"])
+    assert len(first) == 1 and len(errors) == 1 and len(sounds) == 1
+    again, _ = soundlib.import_sounds(sounds, [src])
+    assert again[0] is first[0] and len(sounds) == 1

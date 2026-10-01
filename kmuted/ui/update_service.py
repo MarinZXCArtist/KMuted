@@ -63,7 +63,7 @@ class UpdateService(QObject):
             self.state_changed.emit(tr("Доступна версия {v}", v=release.version))
             self.available.emit(release)
             if manual or release.version != g.skipped_version:
-                self.controller.notify.emit(tr("Доступна новая версия {v} — Настройки → Обновления", v=release.version), "info")
+                self.controller.notify.emit(tr("Вышла версия {v} — нажмите «Обновить» на главной", v=release.version), "info")
 
         run_in_background(updater.check_latest, done)
 
@@ -76,7 +76,9 @@ class UpdateService(QObject):
         release = self.release
         if release is None or self.busy:
             return
-        if not updater.can_self_update() or not release.installer_url:
+        frozen = updater.is_frozen()
+        usable = release.installer_url if frozen else release.source_url
+        if not updater.can_self_update() or not usable:
             QDesktopServices.openUrl(QUrl(release.page_url))
             return
         self.busy = True
@@ -84,15 +86,31 @@ class UpdateService(QObject):
         self.state_changed.emit(tr("Скачиваю обновление…"))
         relay = _Relay(self)
         relay.progress.connect(lambda done, total: self.progress.emit(int(done * 100 / total) if total else -1))
-        relay.done.connect(self._installer_ready)
+        relay.done.connect(self._installer_ready if frozen else self._source_ready)
 
         def work() -> None:
             try:
-                relay.done.emit(updater.download_installer(release, relay.progress.emit, self._cancel.is_set), None)
+                if frozen:
+                    result = updater.download_installer(release, relay.progress.emit, self._cancel.is_set)
+                else:  # a copy from the ZIP: replace the files right here
+                    archive = updater.download_source(release, relay.progress.emit, self._cancel.is_set)
+                    result = updater.install_source(archive)
+                relay.done.emit(result, None)
             except Exception as exc:  # noqa: BLE001 - shown to the user
                 relay.done.emit(None, exc)
 
         threading.Thread(target=work, daemon=True).start()
+
+    def _source_ready(self, version, error) -> None:
+        self.busy = False
+        if error is not None:
+            self.state_changed.emit(tr("Обновление не удалось: {error}", error=error))
+            self.controller.error.emit(tr("Не удалось обновить KMuted: {error}", error=error))
+            return
+        self.state_changed.emit(tr("Обновлено до {v} — перезапускаю…", v=version or self.release.version))
+        self.controller.save_now()
+        updater.restart_source()
+        QTimer.singleShot(300, QApplication.instance().quit)
 
     def cancel(self) -> None:
         self._cancel.set()

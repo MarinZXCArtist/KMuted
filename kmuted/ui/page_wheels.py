@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
+    QFileDialog,
     QFormLayout,
     QHBoxLayout,
     QHeaderView,
@@ -20,6 +24,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from kmuted.audio import sounds as soundlib
 from kmuted.config import WHEEL_MAX_SLOTS, WHEEL_MIN_SLOTS, Wheel, WheelSlot
 from kmuted.hotkeys.keys import format_combo
 from kmuted.ui import theme
@@ -50,9 +55,13 @@ class WheelsPage(QWidget):
         left_buttons = QHBoxLayout()
         left_buttons.addWidget(add)
         left_buttons.addWidget(remove)
+        sound_wheel = make_button(tr("Колесо из звуков"), "volume")
+        sound_wheel.setToolTip(tr("Новое колесо из ваших звуков, как в Soundpad"))
+        sound_wheel.clicked.connect(self.add_sound_wheel)
         left = QVBoxLayout()
         left.addWidget(self.list, 1)
         left.addLayout(left_buttons)
+        left.addWidget(sound_wheel)
 
         # middle: editor
         self.name = QLineEdit()
@@ -99,14 +108,24 @@ class WheelsPage(QWidget):
         self.slot_sound.setToolTip(tr("Вместо фразы сектор может проиграть звук из саундборда"))
         self.slot_sound.currentIndexChanged.connect(self._sound_changed)
         self.slot_voice_label = QLabel(tr("Голос сектора"))
-        voice_row = QHBoxLayout()
-        voice_row.addWidget(self.slot_voice_label)
-        voice_row.addWidget(self.slot_voice, 1)
-        voice_row.addWidget(self.slot_sound, 1)
+        self.slot_file = make_button(tr("Звук из файла…"), "folder")
+        self.slot_file.setToolTip(tr("mp3 / wav / ogg в выбранный сектор — как в Soundpad"))
+        self.slot_file.clicked.connect(self._pick_sound_file)
+        voice_row = QVBoxLayout()
+        voice_row.setSpacing(6)
+        first = QHBoxLayout()
+        first.addWidget(self.slot_voice_label)
+        first.addWidget(self.slot_voice, 1)
+        second = QHBoxLayout()
+        second.addWidget(self.slot_sound, 1)
+        second.addWidget(self.slot_file)
+        voice_row.addLayout(first)
+        voice_row.addLayout(second)
 
         hint = QLabel(
             tr("Двойной клик по ячейке — редактировать. Пустой сектор на колесе не выбирается. "
-            "Надпись — короткий текст на колесе, «Что сказать» — полная фраза.")
+            "Надпись — короткий текст на колесе, «Что сказать» — полная фраза. "
+            "Звуки: «Звук из файла…» или перетащите mp3/wav прямо на таблицу.")
         )
         hint.setObjectName("hint")
         hint.setWordWrap(True)
@@ -121,7 +140,7 @@ class WheelsPage(QWidget):
         # right: preview
         self.preview = WheelPreview()
         self.preview.setMinimumSize(280, 280)
-        test = make_button(tr("Сказать выбранную фразу"), "play")
+        test = make_button(tr("Проиграть выбранный сектор"), "play")
         test.clicked.connect(self._say_selected)
         right_box = QWidget()
         right_box.setFixedWidth(300)
@@ -136,7 +155,8 @@ class WheelsPage(QWidget):
         body.addLayout(middle, 1)
         body.addWidget(right_box)
 
-        self.editor_widgets = [self.name, self.hotkey, self.count, self.table, self.slot_voice, self.slot_sound, test]
+        self.editor_widgets = [self.name, self.hotkey, self.count, self.table, self.slot_voice, self.slot_sound, self.slot_file, test]
+        self.setAcceptDrops(True)
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(28, 24, 28, 12)
@@ -160,7 +180,7 @@ class WheelsPage(QWidget):
         return wheels[row] if 0 <= row < len(wheels) else None
 
     def _on_config_changed(self, section: str) -> None:
-        if section == "voices":
+        if section in ("voices", "sounds"):
             self._load_wheel(self.list.currentRow())
         elif section == "profiles":
             self.refresh_list()
@@ -209,7 +229,15 @@ class WheelsPage(QWidget):
             num.setTextAlignment(Qt.AlignCenter)
             self.table.setItem(row, 0, num)
             self.table.setItem(row, 1, QTableWidgetItem(slot.label))
-            self.table.setItem(row, 2, QTableWidgetItem(slot.text))
+            sound = self.controller.config.sound_by_id(slot.sound_id) if slot.sound_id else None
+            if sound is not None:
+                what = QTableWidgetItem(f"♪\u00a0{sound.name}")
+                what.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+                what.setForeground(QColor(theme.ACCENT_2))
+                what.setToolTip(tr("Сектор играет звук. Чтобы он говорил фразу, выберите «без звука» ниже."))
+            else:
+                what = QTableWidgetItem(slot.text)
+            self.table.setItem(row, 2, what)
         self.table.blockSignals(False)
         if wheel.slots:
             self.table.setCurrentCell(max(0, min(self.table.currentRow(), len(wheel.slots) - 1)), 2)
@@ -310,6 +338,7 @@ class WheelsPage(QWidget):
             return
         wheel.slots[row].sound_id = self.slot_sound.currentData() or ""
         self.slot_voice.setEnabled(not wheel.slots[row].sound_id)
+        self._fill_table(wheel)
         self._changed()
 
     def _voice_changed(self) -> None:
@@ -323,9 +352,107 @@ class WheelsPage(QWidget):
     def _say_selected(self) -> None:
         wheel = self._wheel()
         row = self.table.currentRow()
-        if wheel and 0 <= row < len(wheel.slots) and wheel.slots[row].text.strip():
-            slot = wheel.slots[row]
-            self.controller.say(slot.text, slot.voice_id, persist=True)
+        if not wheel or not 0 <= row < len(wheel.slots):
+            return
+        slot = wheel.slots[row]
+        if slot.sound_id and self.controller.config.sound_by_id(slot.sound_id):
+            self.controller.play_sound(slot.sound_id)
+        elif slot.text.strip():
+            self.controller.say(slot.text, slot.voice_id, persist=True, phrase=True)
+
+    # --- sounds in the wheel --------------------------------------------------------
+
+    def _pick_sound_file(self) -> None:
+        exts = " ".join(f"*{e}" for e in soundlib.AUDIO_EXTS)
+        files, _f = QFileDialog.getOpenFileNames(self, tr("Звуки для колеса"), "", f"{tr('Аудио')} ({exts})")
+        if files:
+            self.put_sound_files(files, self.table.currentRow())
+
+    def put_sound_files(self, files: list[str], start_row: int = -1) -> None:
+        """Import audio files and put them into sectors, from ``start_row`` on.
+
+        The first file goes to ``start_row`` (or the first empty sector),
+        the rest to the next empty sectors; the wheel grows up to 12 sectors.
+        """
+        wheel = self._wheel()
+        if wheel is None:
+            return
+        cfg = self.controller.config
+        sounds, errors = soundlib.import_sounds(cfg.sounds, files)
+        if errors:
+            self.controller.error.emit(errors[0])
+        if not sounds:
+            return
+        placed = 0
+        row = start_row if 0 <= start_row < len(wheel.slots) else -1
+        for sound in sounds:
+            if row < 0 or placed > 0:
+                row = _next_empty(wheel, max(row, 0))
+                if row < 0 and len(wheel.slots) < WHEEL_MAX_SLOTS:
+                    wheel.slots.append(WheelSlot())
+                    row = len(wheel.slots) - 1
+                if row < 0:
+                    break
+            wheel.slots[row].sound_id = sound.id
+            wheel.slots[row].label = ""  # the caption becomes the sound's name
+            placed += 1
+        self.controller.edited("sounds")
+        self._loading = True
+        self.count.setValue(len(wheel.slots))
+        self._loading = False
+        self._fill_table(wheel)
+        self._changed()
+        if placed < len(sounds):
+            self.controller.notify.emit(tr("В колесе максимум {n} секторов — лишние звуки добавлены только в «Звуки»", n=WHEEL_MAX_SLOTS), "warning")
+        else:
+            self.controller.notify.emit(tr("Звуков в колесе: +{n}", n=placed), "success")
+
+    def add_sound_wheel(self) -> None:
+        """A Soundpad-style wheel made of the soundboard's sounds."""
+        cfg = self.controller.config
+        if not cfg.sounds:
+            exts = " ".join(f"*{e}" for e in soundlib.AUDIO_EXTS)
+            files, _f = QFileDialog.getOpenFileNames(self, tr("Звуки для колеса"), "", f"{tr('Аудио')} ({exts})")
+            if not files:
+                return
+            _sounds, errors = soundlib.import_sounds(cfg.sounds, files)
+            if errors:
+                self.controller.error.emit(errors[0])
+            if not cfg.sounds:
+                return
+            self.controller.edited("sounds")
+        slots = [WheelSlot(sound_id=snd.id) for snd in cfg.sounds[:WHEEL_MAX_SLOTS]]
+        slots += [WheelSlot() for _ in range(WHEEL_MIN_SLOTS - len(slots))]
+        cfg.wheels.append(Wheel(name=tr("Звуки"), slots=slots))
+        self.controller.edited("wheels")
+        self.refresh_list(select=len(cfg.wheels) - 1)
+        self.controller.notify.emit(tr("Колесо «Звуки» создано — назначьте ему клавишу"), "success")
+
+    # --- drag & drop -------------------------------------------------------------------
+
+    def _dropped_audio(self, event) -> list[str]:
+        files = [u.toLocalFile() for u in event.mimeData().urls() if u.isLocalFile()]
+        return [f for f in files if Path(f).suffix.lower() in soundlib.AUDIO_EXTS]
+
+    def dragEnterEvent(self, event) -> None:  # noqa: N802
+        if event.mimeData().hasUrls() and self._wheel() is not None:
+            event.acceptProposedAction()
+
+    def dragMoveEvent(self, event) -> None:  # noqa: N802
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+
+    def dropEvent(self, event) -> None:  # noqa: N802
+        audio = self._dropped_audio(event)
+        if not audio:
+            if event.mimeData().hasUrls():
+                self.controller.error.emit(tr("Это не аудиофайлы. Подойдут mp3, wav, ogg, flac."))
+            return
+        event.acceptProposedAction()
+        viewport = self.table.viewport()
+        pos = viewport.mapFrom(self, event.position().toPoint())
+        row = self.table.rowAt(pos.y()) if viewport.rect().contains(pos) else self.table.currentRow()
+        self.put_sound_files(audio, row)
 
     # --- list actions ----------------------------------------------------------
 
@@ -344,3 +471,12 @@ class WheelsPage(QWidget):
             del wheels[row]
             self.controller.edited("wheels")
             self.refresh_list(select=max(0, row - 1))
+
+
+def _next_empty(wheel: Wheel, start: int) -> int:
+    """First empty sector from ``start`` on, wrapping around; -1 if none."""
+    n = len(wheel.slots)
+    for i in list(range(start, n)) + list(range(0, min(start, n))):
+        if not wheel.slots[i].filled:
+            return i
+    return -1

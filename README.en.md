@@ -14,7 +14,7 @@ KMuted translates for you too.
 Made for people who can't use their mic (someone is sleeping, no voice, shyness, muteness) but
 still want to take part in voice chat.
 
-**Version 0.4.0** · Windows 10 / 11 (64-bit) · free · English and Russian interface
+**Version 0.4.1** · Windows 10 / 11 (64-bit) · free · English and Russian interface
 
 | | |
 |---|---|
@@ -58,6 +58,14 @@ translation (**Translate** page) and create a profile for your game (**Game prof
 
 ## What's new
 
+**0.4.1**
+- 🔊 **Sounds in the wheel, like Soundpad**: the wheel editor has a **Sound from file…** button, you can drag
+  mp3/wav right onto the sector table, and **Wheel from sounds** builds a wheel from your sounds in one click.
+- 🔄 **One-click updates**: when a new version is out, the Home page shows **Update now** — KMuted
+  downloads it and restarts by itself. Works for the installed version and for the ZIP copy (`run.bat`).
+- 🎙 **Kava's voice** — Ready-made voices → Kava (Maxim): IVONA "Maxim" from your PC or via the new
+  **Amazon Polly** engine.
+
 **0.4.0**
 - 🌐 **Auto-translation** before speaking: type in your language, the voice chat hears another one
   (28 languages). Google and MyMemory for free; DeepL, Claude and OpenAI with an API key.
@@ -66,7 +74,6 @@ translation (**Translate** page) and create a profile for your game (**Game prof
 - New artwork: the Home banner and the wheel center (drawn by code).
 - Tray menu: "Translate before speaking" toggle; the sidebar shows the active profile and language.
 - `run.bat` installs Python (via `winget`) and the libraries by itself — just download the ZIP and run it.
-- 🎙 **Kava's voice** — Ready-made voices → Kava (Maxim): IVONA "Maxim" from your PC or via the new **Amazon Polly** engine.
 
 **0.3.0** — soundboard (mp3/wav on hotkeys), cloud voices (ElevenLabs, OpenAI, Azure, Google,
 Yandex), English interface, installer and auto-updates, a Hotkeys page to bind everything,
@@ -158,14 +165,12 @@ The easiest way is the **Download and install VB-Cable** button on KMuted's Home
 No `winget` (old Windows 10)? Install [Python 3.12](https://www.python.org/downloads/windows/)
 yourself with *Add python.exe to PATH* ticked and run `run.bat` again.
 
-**Updating:** download the ZIP again, unzip it into a new folder and run `run.bat`. Your settings,
-phrases and sounds are stored separately (`%APPDATA%\KMuted`) and stay where they are.
+**Updating happens inside the app.** When a new version is out, the Home page shows **Update now**
+(also in Settings → Updates): KMuted downloads it, replaces its files and restarts. The `.venv` folder,
+your settings, phrases and sounds (`%APPDATA%\KMuted`) are not touched.
 
-**Option B — installer.** Once `KMuted-Setup-<version>.exe` appears on the
-[Releases](https://github.com/MarinZXCArtist/KMuted/releases) page you can install with it: no
-Python, with shortcuts, start with Windows and one-click updates (Settings → Updates). The installer
-is built automatically when a version tag (`v0.4.0`) is pushed — provided GitHub Actions run for
-the account.
+**Option B — installer.** The [Releases](https://github.com/MarinZXCArtist/KMuted/releases) page has
+`KMuted-Setup-<version>.exe`: no Python, with shortcuts, start with Windows and one-click updates.
 
 **Option C — build it yourself.** `build.bat` → `dist\KMuted\KMuted.exe` (a program folder that no
 longer needs Python); `build_installer.bat` → installer `dist\KMuted-Setup-<version>.exe` (installs
@@ -206,8 +211,12 @@ your text; start a message with `=` to say it without translation.
 
 **Wheel:** hold the key, move the mouse towards the phrase you want (it lights up) and release the
 key. Release in the center — nothing is said. Works even in shooters where the cursor is hidden.
-Settings can switch it to "press → choose → press again". A wheel slot can play a sound instead of
-a phrase.
+Settings can switch it to "press → choose → press again".
+
+**Sounds in the wheel (like Soundpad):** Wheels page → pick a sector → **Sound from file…**, or just drag
+mp3/wav files from a folder onto the sector table (several files fill the free sectors). **Wheel from
+sounds** creates a wheel from all your sounds. Sounds from the Sounds page can also be picked in the list
+under the table; on the wheel such sectors are marked ♪.
 
 **Sounds:** Sounds page → **Add sounds**, or drag files into the window. Pressing a sound's key
 again stops it. Sounds play on top of speech and hold the push-to-talk key too.
@@ -434,19 +443,12 @@ docs/screenshots/   README screenshots (tools/make_screenshots.py)
 installer/          Inno Setup installer script (EN/RU)
 ```
 
-Every push is built on Windows in GitHub Actions (tests, exe, installer). A `v*` tag
-(e.g. `v0.4.0`) publishes a release with the installer — auto-updates use it.
+Every push is built on Windows in GitHub Actions (tests, exe, installer).
 
-**Publishing a version (on the GitHub website, no command line):**
-
-1. Make sure the version in `kmuted/__init__.py` is new (e.g. `0.4.0`).
-2. Open **Releases → Draft a new release**.
-3. In **Choose a tag** type `v0.4.0` → **Create new tag: v0.4.0 on publish**; set **Target** to the
-   branch with the code.
-4. Title, e.g. `KMuted 0.4.0`; description — the list from "What's new".
-5. Click **Publish release**. The build takes ~10–15 minutes (**Actions** tab); then
-   `KMuted-Setup-0.4.0.exe` and the portable `KMuted-0.4.0-windows.zip` are attached to the release
-   automatically.
+**Publishing a version:** raise the number in `kmuted/__init__.py` (e.g. `0.4.2`), add a `## 0.4.2`
+section to [`CHANGELOG.md`](CHANGELOG.md) and push to the default branch. The build publishes release
+`v0.4.2` with the installer and the portable ZIP by itself, and users get the **Update now** button (the
+`CHANGELOG.md` text is shown as "what's new"). Pushing a `v*` tag publishes a release too.
 New UI strings are written in Russian inside `tr("…")`, and the English translation goes into
 `kmuted/i18n_en.py`; `python tools/i18n_strings.py --missing` lists what's missing.
 Documentation: [README.md](README.md) (Russian) and this file — keep them in sync.

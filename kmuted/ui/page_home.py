@@ -154,6 +154,8 @@ class HomePage(QWidget):
         lay.setContentsMargins(28, 24, 28, 20)
         lay.setSpacing(14)
         lay.addWidget(self._build_hero())
+        self.update_card = self._build_update()
+        lay.addWidget(self.update_card)
         lay.addLayout(self._build_tiles())
         self.setup_card = self._build_setup()
         lay.addWidget(self.setup_card)
@@ -180,6 +182,13 @@ class HomePage(QWidget):
         controller.config_changed.connect(lambda _s: self._refresh_timer.start())
         controller.hotkeys_toggled.connect(lambda _e: self._refresh_timer.start())
         controller.speaking_changed.connect(self._on_speaking)
+        updates = getattr(controller, "updates", None)
+        if updates is not None:
+            updates.available.connect(self._on_update_available)
+            updates.state_changed.connect(self._on_update_state)
+            updates.progress.connect(self._on_update_progress)
+            if updates.release is not None:
+                self._on_update_available(updates.release)
         self.refresh()
 
     # ------------------------------------------------------------ build
@@ -234,6 +243,64 @@ class HomePage(QWidget):
         for i, tile in enumerate((self.tile_mic, self.tile_voice, self.tile_keys)):
             grid.addWidget(tile, 0, i)
         return grid
+
+    def _build_update(self) -> QFrame:
+        """«A new version is out» — hidden until the update check finds one."""
+        box = card("info")
+        lay = QHBoxLayout(box)
+        lay.setContentsMargins(18, 14, 18, 14)
+        lay.setSpacing(14)
+        lay.addWidget(IconBadge("download", theme.ACCENT_2, 42))
+        col = QVBoxLayout()
+        col.setSpacing(3)
+        self.update_title = QLabel()
+        self.update_title.setObjectName("h3")
+        self.update_note = QLabel()
+        self.update_note.setObjectName("hint")
+        self.update_note.setWordWrap(True)
+        self.update_bar = QProgressBar()
+        self.update_bar.setFixedHeight(6)
+        self.update_bar.setTextVisible(False)
+        self.update_bar.hide()
+        col.addWidget(self.update_title)
+        col.addWidget(self.update_note)
+        col.addWidget(self.update_bar)
+        lay.addLayout(col, 1)
+        self.update_btn = make_button(tr("Обновить сейчас"), "download", "primary")
+        self.update_btn.clicked.connect(self._start_update)
+        later = make_button(tr("Позже"), "x", "ghost")
+        later.clicked.connect(box.hide)
+        lay.addWidget(self.update_btn, 0, Qt.AlignVCenter)
+        lay.addWidget(later, 0, Qt.AlignVCenter)
+        box.hide()
+        return box
+
+    def _on_update_available(self, release) -> None:
+        if release.version == self.controller.config.general.skipped_version:
+            return
+        self.update_title.setText(tr("Вышла новая версия KMuted {v}", v=release.version))
+        lines = [ln.strip("-*• ").strip() for ln in release.notes.splitlines() if ln.strip().startswith(("-", "*", "•"))]
+        note = "  ·  ".join(lines[:3]) or tr("Нажмите «Обновить сейчас» — KMuted скачает новую версию и перезапустится сам.")
+        self.update_note.setText(note)
+        self.update_btn.setEnabled(True)
+        self.update_card.show()
+
+    def _start_update(self) -> None:
+        self.update_btn.setEnabled(False)
+        self.controller.updates.install()
+
+    def _on_update_state(self, text: str) -> None:
+        if self.update_card.isVisible():
+            self.update_note.setText(text)
+            if not self.controller.updates.busy:
+                self.update_bar.hide()
+                self.update_btn.setEnabled(True)
+
+    def _on_update_progress(self, value: int) -> None:
+        self.update_bar.show()
+        self.update_bar.setMaximum(0 if value < 0 else 100)
+        if value >= 0:
+            self.update_bar.setValue(value)
 
     def _build_setup(self) -> QFrame:
         box = card("warn")

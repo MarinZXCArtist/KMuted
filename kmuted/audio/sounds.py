@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import filecmp
 import logging
 import shutil
 import threading
@@ -41,10 +42,34 @@ def import_file(src: str | Path) -> str:
     dest = folder / src.name
     n = 1
     while dest.exists():
+        if filecmp.cmp(src, dest, shallow=False):
+            return dest.name  # the same file was added before: no second copy
         dest = folder / f"{src.stem} ({n}){src.suffix}"
         n += 1
     shutil.copy2(src, dest)
     return dest.name
+
+
+def import_sounds(sounds: list[Sound], files) -> tuple[list[Sound], list[str]]:
+    """Add audio files to the soundboard list ``sounds`` (in place).
+
+    Returns the sounds for ``files`` (existing entries are reused) and the
+    error messages of files that could not be added.
+    """
+    result: list[Sound] = []
+    errors: list[str] = []
+    for src in files:
+        try:
+            stored = import_file(src)
+        except (SoundError, OSError) as exc:
+            errors.append(str(exc))
+            continue
+        sound = next((x for x in sounds if x.file == stored), None)
+        if sound is None:
+            sound = Sound(name=nice_name(stored), file=stored)
+            sounds.append(sound)
+        result.append(sound)
+    return result, errors
 
 
 def nice_name(file_name: str) -> str:

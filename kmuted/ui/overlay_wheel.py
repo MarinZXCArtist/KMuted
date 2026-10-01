@@ -65,7 +65,14 @@ def _sector_path(center: QPointF, r_in: float, r_out: float, start_deg: float, s
 
 
 def _elide_lines(text: str, fm: QFontMetrics, width: int, max_lines: int = 2) -> list[str]:
-    words = text.split()
+    # Split on plain spaces only: a no-break space keeps "♪ name" together,
+    # unless that word is too wide — then the note goes on its own line.
+    words: list[str] = []
+    for word in text.split(" "):
+        if "\u00a0" in word and fm.horizontalAdvance(word) > width:
+            words.extend(part for part in word.split("\u00a0") if part)
+        elif word:
+            words.append(word)
     lines: list[str] = []
     current = ""
     for word in words:
@@ -371,7 +378,7 @@ class WheelOverlay(QWidget):
     def paintEvent(self, _event) -> None:  # noqa: N802
         p = QPainter(self)
         slot = self.selected_slot()
-        center = (slot.text.strip() or self.captions[self.selected]) if slot else ""
+        center = (self.captions[self.selected] if slot.sound_id else slot.text.strip() or self.captions[self.selected]) if slot else ""
         hint = f"{self.title} — {self.hint}" if self.hint else self.title
         paint_wheel(
             p,

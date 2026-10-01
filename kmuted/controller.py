@@ -692,10 +692,11 @@ class Controller(QObject):
     # --- wheel ------------------------------------------------------------------
 
     def slot_caption(self, slot) -> str:
-        if slot.caption:
-            return slot.caption
         sound = self.config.sound_by_id(slot.sound_id) if slot.sound_id else None
-        return sound.name if sound else ""
+        if sound is not None:
+            name = slot.label.strip() or sound.name
+            return name if name.startswith("♪") else f"♪\u00a0{name}"  # no line break after the note
+        return slot.caption
 
     def _wheel_pressed(self, wheel_id: str, combo: str) -> None:
         toggle = self.config.general.wheel_mode == cfgmod.WHEEL_TOGGLE

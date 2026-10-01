@@ -837,4 +837,25 @@ EN: dict[str, str] = {
     "Голос «{name}» добавлен через Amazon Polly и выбран основным.": "Voice “{name}” added via Amazon Polly and made the default.",
     "Голос «{name}» добавлен. Это Amazon Polly: вставьте ниже ключи AWS (кнопка «Получить ключ»).":
         "Voice “{name}” added. It uses Amazon Polly: paste your AWS keys below (“Get a key” button).",
+    # --- sounds in wheels, one-click updates ---------------------------------------------
+    "mp3 / wav / ogg в выбранный сектор — как в Soundpad": "mp3 / wav / ogg into the selected sector — like Soundpad",
+    "В колесе максимум {n} секторов — лишние звуки добавлены только в «Звуки»": "A wheel has at most {n} sectors — the extra sounds were only added to Sounds",
+    "Двойной клик по ячейке — редактировать. Пустой сектор на колесе не выбирается. Надпись — короткий текст на колесе, «Что сказать» — полная фраза. Звуки: «Звук из файла…» или перетащите mp3/wav прямо на таблицу.":
+        "Double-click a cell to edit. Empty sectors can't be picked on the wheel. Caption — short text on the wheel, “What to say” — the full phrase. Sounds: “Sound from file…” or drag mp3/wav right onto the table.",
+    "Звук из файла…": "Sound from file…",
+    "Звуки для колеса": "Sounds for the wheel",
+    "Звуков в колесе: +{n}": "Sounds in the wheel: +{n}",
+    "Колесо «Звуки» создано — назначьте ему клавишу": "Wheel “Sounds” created — give it a hotkey",
+    "Колесо из звуков": "Wheel from sounds",
+    "Новое колесо из ваших звуков, как в Soundpad": "A new wheel made of your sounds, like Soundpad",
+    "Проиграть выбранный сектор": "Play the selected sector",
+    "Сектор играет звук. Чтобы он говорил фразу, выберите «без звука» ниже.": "This sector plays a sound. To make it say a phrase, choose “no sound” below.",
+    "Вышла версия {v} — нажмите «Обновить» на главной": "Version {v} is out — click “Update” on the Home page",
+    "Вышла новая версия KMuted {v}": "KMuted {v} is out",
+    "Нажмите «Обновить сейчас» — KMuted скачает новую версию и перезапустится сам.": "Click “Update now” — KMuted downloads the new version and restarts by itself.",
+    "Не удалось обновить KMuted: {error}": "Could not update KMuted: {error}",
+    "Обновить сейчас": "Update now",
+    "Обновление не удалось: {error}": "Update failed: {error}",
+    "Обновлено до {v} — перезапускаю…": "Updated to {v} — restarting…",
+    "Позже": "Later",
 }
